@@ -245,7 +245,7 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   ].filter(Boolean).join('\n');
   const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nتعليق ${first || 'متابع'}: ${cut(comment, 400)}`;
   // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
-  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
+  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
   let lastErr = '';
   for (const model of models) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -261,8 +261,8 @@ async function generateSmart(comment: string, name: string, pageName: string, to
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       lastErr = data?.error?.message || `HTTP ${res.status}`;
-      // الموديل مش موجود/اتوقف ← جرب اللي بعده؛ أي خطأ تاني (المفتاح، الحصة) ← نوقف
-      if (res.status === 404 || /no longer available|not found|not supported|deprecated/i.test(lastErr)) continue;
+      // الموديل مش موجود/اتوقف/عليه ضغط/خلصت حصته ← جرب اللي بعده؛ مشكلة في المفتاح نفسه ← نوقف
+      if ([404, 429, 500, 503].includes(res.status) || /no longer available|not found|not supported|deprecated|high demand|overloaded|unavailable|quota/i.test(lastErr)) continue;
       throw new Error(lastErr);
     }
     geminiModelOk = model;

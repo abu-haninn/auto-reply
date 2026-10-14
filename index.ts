@@ -1,0 +1,624 @@
+// =====================================================================
+//  الرد على رسائل الصفحة والتعليقات — السيرفر (Supabase Edge Function)
+//  بيشتغل 24 ساعة على Supabase حتى لو جهازك مقفول
+//
+//  المسارات:
+//    /bot/webhook      ← فيسبوك بيبعت التعليقات والرسائل هنا لحظيًا
+//    /bot/cron         ← Supabase بيناديه كل 30 ثانية يفحص التعليقات
+//    /bot/fb/callback  ← رجوع تسجيل الدخول بفيسبوك
+//    /bot/api/...      ← لوحة التحكم (محتاج كلمة السر)
+// =====================================================================
+import { createClient } from 'npm:@supabase/supabase-js@2';
+
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };
+
+const env = (k: string) => Deno.env.get(k) ?? '';
+const GRAPH = `https://graph.facebook.com/${env('GRAPH_VERSION') || 'v23.0'}`;
+const FN_URL = `${env('SUPABASE_URL')}/functions/v1/bot`;
+const db = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'), { auth: { persistSession: false } });
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'content-type, x-admin-password, authorization, apikey, x-client-info',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+};
+const json = (data: unknown, status = 200) =>
+  new Response(JSON.stringify(data), { status, headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const tail = (id: string) => String(id || '').split('_').pop() as string;
+const background = (p: Promise<unknown>) => {
+  const safe = p.catch((e) => console.error(e));
+  try { EdgeRuntime.waitUntil(safe); } catch { /* محلي */ }
+};
+
+async function sha256(s: string) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+// كلمة تحقق الويب هوك: من الأسرار لو موجودة، وإلا بتتولد تلقائيًا
+let verifyTokenCache = '';
+async function verifyToken() {
+  if (!verifyTokenCache) verifyTokenCache = env('FB_VERIFY_TOKEN') || 'vt_' + (await sha256('verify:' + env('SUPABASE_SERVICE_ROLE_KEY'))).slice(0, 24);
+  return verifyTokenCache;
+}
+
+// =====================================================================
+//  النصوص
+// =====================================================================
+function normalize(s: string) {
+  return String(s || '').toLowerCase()
+    .replace(/[ً-ٰٟۖ-ۭ]/g, '')
+    .replace(/ـ/g, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي')
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/(.)\1{2,}/g, '$1')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+function matchKeyword(text: string, keywords: string[]) {
+  const t = normalize(text);
+  if (!t) return null;
+  for (const k of keywords || []) {
+    const n = normalize(k);
+    if (n && t.includes(n)) return k;
+  }
+  return null;
+}
+function pick(list: string[]) {
+  const l = (list || []).map((x) => String(x || '').trim()).filter(Boolean);
+  return l.length ? l[Math.floor(Math.random() * l.length)] : '';
+}
+// {أهلا|مرحبا} ← يختار واحدة · {first_name} {name} {page}
+function fill(tpl: string, v: { name?: string; page?: string }) {
+  const name = (v.name || '').trim();
+  const first = name.split(/\s+/)[0] || '';
+  let out = String(tpl || '');
+  for (let i = 0; i < 5; i++) out = out.replace(/\{([^{}]*\|[^{}]*)\}/g, (_, g) => { const p = g.split('|'); return p[Math.floor(Math.random() * p.length)]; });
+  return out.replace(/\{name\}/g, name || 'صديقنا').replace(/\{first_name\}/g, first || 'صديقنا').replace(/\{page\}/g, v.page || '').trim();
+}
+
+// =====================================================================
+//  فيسبوك
+// =====================================================================
+class FbError extends Error {
+  code?: number; subcode?: number;
+  constructor(e: any) { super(e?.error_user_msg || e?.message || 'Facebook error'); this.code = e?.code; this.subcode = e?.error_subcode; }
+}
+async function fb(method: string, path: string, params: Record<string, unknown> = {}, token?: string) {
+  const url = new URL(path.startsWith('http') ? path : GRAPH + path);
+  if (token) url.searchParams.set('access_token', token);
+  const init: RequestInit = { method };
+  if (method === 'GET' || method === 'DELETE') {
+    for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+  } else {
+    init.headers = { 'Content-Type': 'application/json' };
+    init.body = JSON.stringify(params);
+  }
+  const res = await fetch(url, init);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) throw new FbError(data.error || { message: `HTTP ${res.status}` });
+  return data;
+}
+function explain(e: any) {
+  const c = e?.code;
+  if (c === 190) return 'التوكن انتهى — اربط الصفحة من جديد';
+  if (c === 10 || c === 200 || c === 3) return 'صلاحية ناقصة — لازم التطبيق يكون Live (شوف الدليل)';
+  if (c === 368) return 'فيسبوك وقف الإجراء مؤقتًا (سبام) — نوّع الردود';
+  if (c === 551 || e?.subcode === 1545041) return 'الشخص ده قافل الرسائل';
+  if (c === 4 || c === 17 || c === 32 || c === 613) return 'ضغط كبير على فيسبوك — هيتحاول تاني';
+  if (/only be replied|already been replied/i.test(e?.message || '')) return 'اتبعتله رسالة خاصة قبل كده';
+  return e?.message || 'خطأ غير معروف';
+}
+function buildMessage(text: string, btnTitle?: string | null, btnUrl?: string | null) {
+  if (btnTitle && btnUrl) {
+    return { attachment: { type: 'template', payload: { template_type: 'button', text: text.slice(0, 640), buttons: [{ type: 'web_url', url: btnUrl, title: btnTitle.slice(0, 20) }] } } };
+  }
+  return { text: text.slice(0, 2000) };
+}
+async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, bt?: string | null, bu?: string | null) {
+  try {
+    return await fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: buildMessage(text, bt, bu) }, token);
+  } catch (e) {
+    if (!bt || !bu) throw e;
+    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: { text: (text + '\n' + bu).slice(0, 2000) } }, token);
+  }
+}
+async function recentPosts(pageId: string, token: string, limit = 24) {
+  const [posts, videos] = await Promise.allSettled([
+    fb('GET', `/${pageId}/posts`, { fields: 'id,message,full_picture,permalink_url,created_time,status_type', limit }, token),
+    fb('GET', `/${pageId}/videos`, { fields: 'id,description,title,picture,permalink_url,created_time', limit: 12 }, token),
+  ]);
+  const seen = new Set<string>();
+  const out: any[] = [];
+  const add = (o: any) => { const t = tail(o.id); if (!seen.has(t)) { seen.add(t); out.push(o); } };
+  if (posts.status === 'fulfilled') for (const p of posts.value.data || []) add({
+    id: p.id, video: String(p.status_type || '').includes('video'), text: p.message || '', image: p.full_picture || '', link: p.permalink_url || '', created: p.created_time,
+  });
+  if (videos.status === 'fulfilled') for (const v of videos.value.data || []) add({
+    id: `${pageId}_${v.id}`, video: true, text: v.title || v.description || '', image: v.picture || '',
+    link: v.permalink_url ? (String(v.permalink_url).startsWith('http') ? v.permalink_url : 'https://www.facebook.com' + v.permalink_url) : '', created: v.created_time,
+  });
+  if (posts.status === 'rejected' && videos.status === 'rejected') throw posts.reason;
+  return out.sort((a, b) => +new Date(b.created) - +new Date(a.created));
+}
+function parseLink(input: string): { id?: string; error?: string } {
+  const s = String(input || '').trim();
+  if (/^\d+(_\d+)?$/.test(s)) return { id: s };
+  let u: URL;
+  try { u = new URL(s.startsWith('http') ? s : 'https://' + s); } catch { return { error: 'الرابط مش صحيح' }; }
+  const q = u.searchParams; let m;
+  if ((m = u.pathname.match(/\/(?:videos|reel|reels)\/(?:[^/]+\/)?(\d+)/))) return { id: m[1] };
+  if (/^\d+$/.test(q.get('v') || '')) return { id: q.get('v')! };
+  if (/^\d+$/.test(q.get('story_fbid') || '')) return { id: (q.get('id') ? q.get('id') + '_' : '') + q.get('story_fbid') };
+  if (/^\d+$/.test(q.get('fbid') || '')) return { id: q.get('fbid')! };
+  if ((m = u.pathname.match(/\/(?:posts|permalink|photos)\/(?:[^/]+\/)*?(\d{6,})/))) return { id: m[1] };
+  if (/pfbid/.test(s)) return { error: 'الرابط ده نوعه pfbid — اختار المنشور من الصور اللي فوق بدل الرابط' };
+  if ((m = s.match(/(\d{10,})/))) return { id: m[1] };
+  return { error: 'مش قادر أقرا الرابط — اختار المنشور من الصور اللي فوق' };
+}
+
+// =====================================================================
+//  قاعدة البيانات
+// =====================================================================
+async function getSettings() {
+  const { data, error } = await db.from('settings').select('*').eq('id', 1).single();
+  if (error) throw new Error('قاعدة البيانات مش متجهزة — شغّل ملف schema.sql في Supabase: ' + error.message);
+  return data;
+}
+async function setSettings(patch: Record<string, unknown>) {
+  const { error } = await db.from('settings').update(patch).eq('id', 1);
+  if (error) throw new Error(error.message);
+}
+function log(type: string, text: string) {
+  return db.from('logs').insert({ type, text: text.slice(0, 500) }).then(() => {}, () => {});
+}
+const bump = (cid: string, col: string) => db.rpc('bump', { cid, col, n: 1 }).then(() => {}, () => {});
+// "حجز" التعليق: لو اتعالج قبل كده بيرجع false (ده اللي بيمنع الرد مرتين)
+async function claim(commentId: string, campaignId: string, userId?: string) {
+  const { error } = await db.from('processed').insert({ comment_id: commentId, campaign_id: campaignId, user_id: userId || null });
+  return !error;
+}
+
+// =====================================================================
+//  المحرك
+// =====================================================================
+type Comment = { commentId: string; postId: string; message: string; fromId?: string; fromName?: string; created?: number };
+
+function findCampaign(campaigns: any[], postId: string, message: string) {
+  const t = tail(postId);
+  for (const c of campaigns) {
+    if (!c.active) continue;
+    const targeted = c.all_posts || (c.posts || []).some((p: any) => tail(p.id) === t || (p.alt || []).some((a: string) => tail(a) === t));
+    if (!targeted) continue;
+    if (c.match_all) return c;
+    if (matchKeyword(message, c.keywords)) return c;
+  }
+  return null;
+}
+
+async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0) {
+  if (!s.page_id || !s.page_token || !cm.commentId) return;
+  if (cm.fromId && cm.fromId === s.page_id) return; // تعليقات الصفحة نفسها
+  const c = findCampaign(campaigns, cm.postId, cm.message);
+  if (!c) return;
+  if (cm.created && cm.created < new Date(c.since).getTime() - 60_000) return; // تعليق قديم قبل تشغيل الطلب
+
+  const who = cm.fromName || 'متابع';
+  if (c.one_per_user && cm.fromId) {
+    const { count } = await db.from('processed').select('comment_id', { count: 'exact', head: true }).eq('campaign_id', c.id).eq('user_id', cm.fromId);
+    if (count) { if (await claim(cm.commentId, c.id, cm.fromId)) log('skip', `${who} علّق تاني — اتجاهل عشان أخد رد قبل كده`); return; }
+  }
+  if (!(await claim(cm.commentId, c.id, cm.fromId))) return; // اتعالج بالفعل
+
+  await bump(c.id, 'matched');
+  await log('comment', `💬 ${who}: "${cm.message.slice(0, 80)}" ← ${c.name}`);
+  if (delayMs) await sleep(delayMs);
+
+  const vars = { name: cm.fromName, page: s.page_name };
+  const fail = async (what: string, e: unknown) => { await bump(c.id, 'errors'); await log('error', `❌ ${what} (${who}): ${explain(e)}`); };
+
+  if (c.like_comment) {
+    try { await fb('POST', `/${cm.commentId}/likes`, {}, s.page_token); await bump(c.id, 'liked'); }
+    catch (e) { await fail('اللايك', e); }
+    await sleep(800);
+  }
+  if (c.reply_enabled) {
+    const text = fill(pick(c.replies), vars);
+    if (text) {
+      try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${text.slice(0, 70)}"`); }
+      catch (e) { await fail('الرد على التعليق', e); }
+      await sleep(800);
+    }
+  }
+  if (c.dm_enabled) {
+    const text = fill(pick(c.dm_messages), vars);
+    if (text) {
+      try {
+        const r = await sendPrivateReply(s.page_id, cm.commentId, text, s.page_token, c.button_title, c.button_url);
+        await bump(c.id, 'messaged');
+        if (r?.recipient_id) await db.from('dm_sent').upsert({ psid: r.recipient_id, at: new Date().toISOString() });
+        await log('dm', `📩 رسالة ماسنجر اتبعتت لـ ${who}`);
+      } catch (e) { await fail('رسالة الماسنجر', e); }
+    }
+  }
+}
+
+async function handleMessage(psid: string, text: string, s: any) {
+  if (!s.page_id || !s.page_token || psid === s.page_id) return;
+  const nameOf = async () => { try { const r = await fb('GET', `/${psid}`, { fields: 'name,first_name' }, s.page_token); return r.name || r.first_name || ''; } catch { return ''; } };
+  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: msg.slice(0, 2000) } }, s.page_token);
+
+  const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
+  for (const r of rules || []) {
+    if (!matchKeyword(text, r.keywords)) continue;
+    const name = await nameOf();
+    try { await send(fill(r.reply, { name, page: s.page_name })); await db.rpc('bump_rule', { rid: r.id }); await db.from('dm_sent').upsert({ psid, at: new Date().toISOString() }); await log('dm', `📨 رد ماسنجر تلقائي على ${name || 'متابع'}`); }
+    catch (e) { await log('error', `❌ رد الماسنجر: ${explain(e)}`); }
+    return;
+  }
+  if (!s.dm_auto_enabled || !s.dm_auto_text) return;
+  const { data: last } = await db.from('dm_sent').select('at').eq('psid', psid).maybeSingle();
+  if (last && Date.now() - new Date(last.at).getTime() < (s.dm_cooldown_hours || 24) * 3600_000) return;
+  const name = await nameOf();
+  try { await send(fill(s.dm_auto_text, { name, page: s.page_name })); await db.from('dm_sent').upsert({ psid, at: new Date().toISOString() }); await log('dm', `📨 رد ترحيبي على ${name || 'متابع'}`); }
+  catch (e) { await log('error', `❌ الرد الترحيبي: ${explain(e)}`); }
+}
+
+async function activeCampaigns() {
+  const { data } = await db.from('campaigns').select('*').eq('active', true).order('created_at', { ascending: false });
+  return data || [];
+}
+
+// الفحص الدوري (Supabase بيشغله كل 30 ثانية)
+async function poll(force = false) {
+  const s = await getSettings();
+  if (!s.page_id || !s.page_token) return { skipped: 'no page' };
+  if (!force && s.last_poll && Date.now() - new Date(s.last_poll).getTime() < 20_000) return { skipped: 'too soon' };
+  await setSettings({ last_poll: new Date().toISOString() });
+  const campaigns = await activeCampaigns();
+  if (!campaigns.length) return { skipped: 'no campaigns' };
+
+  const targets = new Set<string>();
+  for (const c of campaigns) for (const p of c.posts || []) targets.add(p.id);
+  if (campaigns.some((c) => c.all_posts)) {
+    try { for (const p of await recentPosts(s.page_id, s.page_token, 5)) targets.add(p.id); } catch { /* */ }
+  }
+
+  const started = Date.now();
+  let handled = 0;
+  for (const objectId of targets) {
+    if (Date.now() - started > 90_000) break;
+    let comments: any[] = [];
+    try {
+      const r = await fb('GET', `/${objectId}/comments`, { fields: 'id,message,from{id,name},created_time', filter: 'stream', order: 'reverse_chronological', limit: 40 }, s.page_token)
+        .catch(() => fb('GET', `/${tail(objectId)}/comments`, { fields: 'id,message,from{id,name},created_time', filter: 'stream', order: 'reverse_chronological', limit: 40 }, s.page_token));
+      comments = r.data || [];
+    } catch (e) {
+      if ((e as FbError).code === 190) { await log('error', '⚠️ ' + explain(e)); return { error: 'token' }; }
+      continue;
+    }
+    if (!comments.length) continue;
+    const { data: done } = await db.from('processed').select('comment_id').in('comment_id', comments.map((c) => c.id));
+    const doneSet = new Set((done || []).map((d) => d.comment_id));
+    for (const c of comments.reverse()) {
+      if (doneSet.has(c.id)) continue;
+      if (Date.now() - started > 100_000) break;
+      await handleComment({ commentId: c.id, postId: objectId, message: c.message || '', fromId: c.from?.id, fromName: c.from?.name, created: new Date(c.created_time).getTime() }, s, campaigns);
+      handled++;
+    }
+  }
+  return { ok: true, targets: targets.size, handled };
+}
+
+// =====================================================================
+//  الويب هوك
+// =====================================================================
+async function validSignature(req: Request, raw: string) {
+  const secret = env('FB_APP_SECRET');
+  if (!secret) return true;
+  const sig = req.headers.get('x-hub-signature-256') || '';
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(raw));
+  const expected = 'sha256=' + [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return sig.length === expected.length && sig === expected;
+}
+
+async function processWebhook(body: any) {
+  if (body.object !== 'page') return;
+  const s = await getSettings();
+  await setSettings({ last_webhook: new Date().toISOString() });
+  let campaigns: any[] | null = null;
+  const jobs: Promise<unknown>[] = [];
+  for (const entry of body.entry || []) {
+    for (const ch of entry.changes || []) {
+      const v = ch.value || {};
+      if (ch.field === 'feed' && v.item === 'comment' && v.verb === 'add') {
+        campaigns ??= await activeCampaigns();
+        const delay = 3000 + Math.random() * 7000; // تأخير بشري 3-10 ثواني
+        jobs.push(handleComment({ commentId: v.comment_id, postId: v.post_id, message: v.message || '', fromId: v.from?.id, fromName: v.from?.name, created: v.created_time ? v.created_time * 1000 : Date.now() }, s, campaigns, delay));
+      }
+    }
+    for (const m of entry.messaging || []) {
+      if (m.message?.is_echo || !m.sender?.id) continue;
+      const text = m.message?.text || m.message?.quick_reply?.payload || m.postback?.title || '';
+      if (m.message || m.postback) jobs.push(handleMessage(m.sender.id, text, s));
+    }
+  }
+  await Promise.allSettled(jobs);
+}
+
+// =====================================================================
+//  لوحة التحكم
+// =====================================================================
+function safePage(s: any) {
+  return s.page_id ? { id: s.page_id, name: s.page_name, picture: s.page_picture, followers: s.page_followers } : null;
+}
+function cleanCampaign(b: any) {
+  const lines = (x: unknown) => (Array.isArray(x) ? x : String(x || '').split('\n')).map((v) => String(v).trim()).filter(Boolean);
+  const kws = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[,،\n]/)).map((k: string) => String(k).trim()).filter(Boolean);
+  const c = {
+    name: String(b.name || '').trim().slice(0, 80) || (kws[0] ? `طلب "${kws[0]}"` : 'طلب جديد'),
+    all_posts: !!b.all_posts,
+    posts: b.all_posts ? [] : (b.posts || []).slice(0, 50).map((p: any) => ({ id: String(p.id), alt: (p.alt || []).map(String), text: String(p.text || '').slice(0, 160), image: String(p.image || ''), link: String(p.link || '') })),
+    keywords: kws,
+    match_all: !!b.match_all,
+    reply_enabled: b.reply_enabled !== false,
+    replies: lines(b.replies),
+    dm_enabled: b.dm_enabled !== false,
+    dm_messages: Array.isArray(b.dm_messages) ? b.dm_messages.map((x: string) => String(x).trim()).filter(Boolean) : [String(b.dm_messages || '').trim()].filter(Boolean),
+    button_title: String(b.button_title || '').trim().slice(0, 20) || null,
+    button_url: String(b.button_url || '').trim() || null,
+    like_comment: b.like_comment !== false,
+    one_per_user: b.one_per_user !== false,
+  };
+  let err = '';
+  if (!c.all_posts && !c.posts.length) err = 'اختار فيديو أو منشور واحد على الأقل';
+  else if (!c.match_all && !c.keywords.length) err = 'اكتب الكلمة المفتاحية (زي: مهتم)';
+  else if (!c.reply_enabled && !c.dm_enabled && !c.like_comment) err = 'شغّل الرد على التعليق أو رسالة الماسنجر';
+  else if (c.reply_enabled && !c.replies.length) err = 'اكتب الرد على التعليق';
+  else if (c.dm_enabled && !c.dm_messages.length) err = 'اكتب رسالة الماسنجر';
+  else if (c.button_url && !/^https?:\/\//.test(c.button_url)) err = 'رابط الزرار لازم يبدأ بـ https://';
+  return { c, err };
+}
+
+async function selectPage(p: any) {
+  let info: any = {};
+  try { info = await fb('GET', `/${p.id}`, { fields: 'name,picture{url},followers_count,fan_count' }, p.token); } catch { /* */ }
+  await setSettings({
+    page_id: p.id, page_name: info.name || p.name, page_token: p.token,
+    page_picture: info.picture?.data?.url || p.picture || null,
+    page_followers: info.followers_count || info.fan_count || null, pending_pages: [],
+  });
+  const warnings: string[] = [];
+  // تفعيل الويب هوك تلقائيًا في تطبيق فيسبوك + اشتراك الصفحة
+  if (env('FB_APP_ID') && env('FB_APP_SECRET')) {
+    try {
+      await fb('POST', `/${env('FB_APP_ID')}/subscriptions`, { object: 'page', callback_url: FN_URL + '/webhook', verify_token: await verifyToken(), fields: 'feed,messages,messaging_postbacks', include_values: true }, `${env('FB_APP_ID')}|${env('FB_APP_SECRET')}`);
+    } catch (e) { warnings.push('تفعيل الويب هوك: ' + explain(e)); }
+  }
+  try { await fb('POST', `/${p.id}/subscribed_apps`, { subscribed_fields: 'feed,messages,messaging_postbacks' }, p.token); }
+  catch (e) { warnings.push('اشتراك الصفحة: ' + explain(e)); }
+  await log('system', `📄 تم ربط صفحة "${info.name || p.name}"` + (warnings.length ? ' — ' + warnings.join(' / ') : ''));
+  return warnings;
+}
+
+async function pagesFromUserToken(userToken: string) {
+  let token = userToken;
+  if (env('FB_APP_ID') && env('FB_APP_SECRET')) {
+    try { token = (await fb('GET', '/oauth/access_token', { grant_type: 'fb_exchange_token', client_id: env('FB_APP_ID'), client_secret: env('FB_APP_SECRET'), fb_exchange_token: userToken })).access_token || userToken; } catch { /* */ }
+  }
+  const r = await fb('GET', '/me/accounts', { fields: 'id,name,access_token,picture{url}', limit: 100 }, token);
+  return (r.data || []).map((p: any) => ({ id: p.id, name: p.name, token: p.access_token, picture: p.picture?.data?.url }));
+}
+
+async function api(req: Request, path: string): Promise<Response> {
+  const pass = env('ADMIN_PASSWORD');
+  if (!pass) return json({ error: 'لازم تضيف ADMIN_PASSWORD في Secrets بتاعة Supabase' }, 500);
+  if ((req.headers.get('x-admin-password') || '') !== pass) return json({ error: 'كلمة السر غلط', auth: true }, 401);
+
+  const method = req.method;
+  const body = method === 'GET' || method === 'DELETE' ? {} : await req.json().catch(() => ({}));
+  const s = await getSettings();
+  let m: RegExpMatchArray | null;
+
+  // ---- الحالة ----
+  if (path === '/status' && method === 'GET') {
+    if (s.cron_url !== FN_URL + '/cron') {
+      const { error } = await db.rpc('setup_cron', { fn_url: FN_URL + '/cron' });
+      if (!error) await setSettings({ cron_url: FN_URL + '/cron' });
+      else console.error('cron', error);
+    }
+    const { data: camps } = await db.from('campaigns').select('active,matched,replied,messaged,liked,errors');
+    const sum = (k: string) => (camps || []).reduce((a: number, c: any) => a + (c[k] || 0), 0);
+    return json({
+      page: safePage(s),
+      totals: { comments: sum('matched'), replies: sum('replied'), messages: sum('messaged'), likes: sum('liked'), errors: sum('errors'), active: (camps || []).filter((c: any) => c.active).length },
+      lastPoll: s.last_poll, lastWebhook: s.last_webhook, cronReady: s.cron_url === FN_URL + '/cron',
+      setup: {
+        appId: !!env('FB_APP_ID'), appSecret: !!env('FB_APP_SECRET'),
+        webhookUrl: FN_URL + '/webhook', redirectUri: FN_URL + '/fb/callback', verifyToken: await verifyToken(),
+      },
+    });
+  }
+
+  // ---- ربط فيسبوك ----
+  if (path === '/fb/login' && method === 'POST') {
+    if (!env('FB_APP_ID') || !env('FB_APP_SECRET')) return json({ error: 'ضيف FB_APP_ID و FB_APP_SECRET في Secrets بتاعة Supabase الأول' }, 400);
+    const state = crypto.randomUUID();
+    const returnTo = /^https?:\/\//.test(body.return_to || '') ? body.return_to : '';
+    await setSettings({ oauth_state: state, return_to: returnTo });
+    const u = new URL(`https://www.facebook.com/${GRAPH.split('/').pop()}/dialog/oauth`);
+    u.searchParams.set('client_id', env('FB_APP_ID'));
+    u.searchParams.set('redirect_uri', FN_URL + '/fb/callback');
+    u.searchParams.set('state', state);
+    if (env('FB_LOGIN_CONFIG_ID')) u.searchParams.set('config_id', env('FB_LOGIN_CONFIG_ID'));
+    else u.searchParams.set('scope', 'pages_show_list,pages_read_engagement,pages_manage_metadata,pages_manage_engagement,pages_read_user_content,pages_messaging');
+    return json({ url: u.toString() });
+  }
+  if (path === '/fb/token' && method === 'POST') {
+    const token = String(body.token || '').trim();
+    if (!token) return json({ error: 'الصق التوكن' }, 400);
+    let pages: any[] = [];
+    try { pages = await pagesFromUserToken(token); } catch { /* ممكن يكون توكن صفحة */ }
+    if (!pages.length) {
+      const me = await fb('GET', '/me', { fields: 'id,name,picture{url}' }, token);
+      pages = [{ id: me.id, name: me.name, token, picture: me.picture?.data?.url }];
+    }
+    await setSettings({ pending_pages: pages });
+    return json({ pages: pages.map(({ token: _t, ...p }) => p) });
+  }
+  if (path === '/fb/pages' && method === 'GET') {
+    return json({ pages: (s.pending_pages || []).map(({ token: _t, ...p }: any) => p) });
+  }
+  if (path === '/fb/select' && method === 'POST') {
+    const p = (s.pending_pages || []).find((x: any) => x.id === body.id);
+    if (!p) return json({ error: 'سجل الدخول بفيسبوك تاني' }, 404);
+    const warnings = await selectPage(p);
+    return json({ ok: true, warnings });
+  }
+  if (path === '/fb/disconnect' && method === 'POST') {
+    if (s.page_id) { try { await fb('DELETE', `/${s.page_id}/subscribed_apps`, {}, s.page_token); } catch { /* */ } }
+    await setSettings({ page_id: null, page_name: null, page_token: null, page_picture: null, page_followers: null });
+    await log('system', '🔌 تم فصل الصفحة');
+    return json({ ok: true });
+  }
+
+  // ---- المنشورات ----
+  if (path === '/posts' && method === 'GET') {
+    if (!s.page_token) return json({ error: 'اربط الصفحة الأول' }, 400);
+    return json({ posts: await recentPosts(s.page_id, s.page_token) });
+  }
+  if (path === '/posts/resolve' && method === 'POST') {
+    if (!s.page_token) return json({ error: 'اربط الصفحة الأول' }, 400);
+    const parsed = parseLink(body.url);
+    if (parsed.error) return json({ error: parsed.error }, 400);
+    const id = parsed.id!;
+    for (const t of id.includes('_') ? [id] : [`${s.page_id}_${id}`, id]) {
+      try {
+        const o = await fb('GET', `/${t}`, { fields: 'id,message,full_picture,permalink_url' }, s.page_token)
+          .catch(() => fb('GET', `/${t}`, { fields: 'id,description,title,picture,permalink_url' }, s.page_token));
+        return json({ post: { id: o.id.includes('_') ? o.id : `${s.page_id}_${o.id}`, alt: [t, id], text: o.message || o.title || o.description || '', image: o.full_picture || o.picture || '', link: body.url } });
+      } catch { /* جرب اللي بعده */ }
+    }
+    return json({ post: { id: `${s.page_id}_${id}`, alt: [id], text: '', image: '', link: body.url } });
+  }
+
+  // ---- الطلبات ----
+  if (path === '/campaigns' && method === 'GET') {
+    const { data } = await db.from('campaigns').select('*').order('created_at', { ascending: false });
+    return json({ campaigns: data || [] });
+  }
+  if (path === '/campaigns' && method === 'POST') {
+    const { c, err } = cleanCampaign(body);
+    if (err) return json({ error: err }, 400);
+    const { data, error } = await db.from('campaigns').insert({ ...c, active: true, since: new Date().toISOString() }).select().single();
+    if (error) return json({ error: error.message }, 500);
+    await log('system', `🚀 تم تشغيل طلب "${c.name}"`);
+    return json({ campaign: data });
+  }
+  if ((m = path.match(/^\/campaigns\/([\w-]+)$/))) {
+    if (method === 'PUT') {
+      const { c, err } = cleanCampaign(body);
+      if (err) return json({ error: err }, 400);
+      const { data, error } = await db.from('campaigns').update(c).eq('id', m[1]).select().single();
+      if (error) return json({ error: error.message }, 500);
+      return json({ campaign: data });
+    }
+    if (method === 'DELETE') {
+      await db.from('campaigns').delete().eq('id', m[1]);
+      return json({ ok: true });
+    }
+  }
+  if ((m = path.match(/^\/campaigns\/([\w-]+)\/toggle$/)) && method === 'POST') {
+    const { data: cur } = await db.from('campaigns').select('active,name').eq('id', m[1]).single();
+    if (!cur) return json({ error: 'الطلب مش موجود' }, 404);
+    const patch: any = { active: !cur.active };
+    if (!cur.active) patch.since = new Date().toISOString();
+    await db.from('campaigns').update(patch).eq('id', m[1]);
+    await log('system', `${patch.active ? '▶️ تشغيل' : '⏸️ إيقاف'} طلب "${cur.name}"`);
+    return json({ active: patch.active });
+  }
+
+  // ---- الماسنجر ----
+  if (path === '/dm' && method === 'GET') {
+    const { data } = await db.from('dm_rules').select('*').order('created_at');
+    return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, rules: data || [] });
+  }
+  if (path === '/dm' && method === 'PUT') {
+    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: String(body.auto_text || '').slice(0, 2000) });
+    const rules = (body.rules || []).map((r: any) => ({
+      active: r.active !== false,
+      keywords: (Array.isArray(r.keywords) ? r.keywords : String(r.keywords || '').split(/[,،]/)).map((k: string) => k.trim()).filter(Boolean),
+      reply: String(r.reply || '').trim().slice(0, 2000),
+    })).filter((r: any) => r.keywords.length && r.reply);
+    await db.from('dm_rules').delete().gte('created_at', '1970-01-01');
+    if (rules.length) await db.from('dm_rules').insert(rules);
+    return json({ ok: true });
+  }
+
+  // ---- النشاط ----
+  if (path === '/logs' && method === 'GET') {
+    const { data } = await db.from('logs').select('*').order('at', { ascending: false }).limit(80);
+    return json({ logs: data || [] });
+  }
+  if (path === '/poll-now' && method === 'POST') {
+    return json(await poll(true));
+  }
+
+  return json({ error: 'مسار غير معروف' }, 404);
+}
+
+// =====================================================================
+//  نقطة الدخول
+// =====================================================================
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
+  const url = new URL(req.url);
+  const path = url.pathname.replace(/^.*?\/bot(?=\/|$)/, '') || '/';
+
+  try {
+    // فيسبوك بيتأكد من الويب هوك
+    if (path === '/webhook' && req.method === 'GET') {
+      if (url.searchParams.get('hub.mode') === 'subscribe' && url.searchParams.get('hub.verify_token') === (await verifyToken())) {
+        return new Response(url.searchParams.get('hub.challenge') || '', { status: 200 });
+      }
+      return new Response('forbidden', { status: 403 });
+    }
+    // أحداث فيسبوك
+    if (path === '/webhook' && req.method === 'POST') {
+      const raw = await req.text();
+      if (!(await validSignature(req, raw))) return new Response('bad signature', { status: 401 });
+      let body: any = {};
+      try { body = JSON.parse(raw); } catch { /* */ }
+      background(processWebhook(body));
+      return new Response('EVENT_RECEIVED', { status: 200 });
+    }
+    // الفحص التلقائي
+    if (path === '/cron') {
+      background(poll(false));
+      return json({ ok: true });
+    }
+    // رجوع تسجيل الدخول
+    if (path === '/fb/callback') {
+      const s = await getSettings();
+      const back = (s.return_to || '') as string;
+      const go = (hash: string) => back
+        ? Response.redirect(back.split('#')[0] + hash, 302)
+        : new Response(`<meta charset="utf-8"><body style="font-family:sans-serif;background:#0B0E11;color:#EAECEF;text-align:center;padding:60px">${hash.includes('err') ? '❌ حصل خطأ' : '✅ تم تسجيل الدخول'} — ارجع للوحة التحكم</body>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      const code = url.searchParams.get('code');
+      if (!code || !s.oauth_state || url.searchParams.get('state') !== s.oauth_state) return go('#err=' + encodeURIComponent(url.searchParams.get('error_description') || 'انتهت المحاولة، جرب تاني'));
+      await setSettings({ oauth_state: null });
+      const t = await fb('GET', '/oauth/access_token', { client_id: env('FB_APP_ID'), client_secret: env('FB_APP_SECRET'), redirect_uri: FN_URL + '/fb/callback', code });
+      const pages = await pagesFromUserToken(t.access_token);
+      await setSettings({ pending_pages: pages });
+      if (pages.length === 1) { await selectPage(pages[0]); return go('#connected'); }
+      return go('#pick-page');
+    }
+    if (path.startsWith('/api/')) return await api(req, path.slice(4));
+    if (path === '/' || path === '/health') return json({ ok: true, name: 'page-auto-reply' });
+    return json({ error: 'not found' }, 404);
+  } catch (e) {
+    console.error(e);
+    return json({ error: e instanceof FbError ? explain(e) : (e as Error).message }, 500);
+  }
+});

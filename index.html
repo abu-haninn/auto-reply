@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>الرد التلقائي</title>
+  <meta name="theme-color" content="#0B0E11">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23FCD535'/%3E%3Cpath d='M8 9h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-5 4v-4H8a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z' fill='%23181A20'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ===================== تسجيل الدخول ===================== -->
+<section class="login hidden" id="loginView">
+  <div class="box">
+    <div class="logo"><i data-i="bot"></i></div>
+    <h1>الرد التلقائي</h1>
+    <p class="c">ردود تلقائية على التعليقات والماسنجر — شغالة 24 ساعة</p>
+    <form class="card" id="loginForm">
+      <div class="field" id="urlField" style="margin-top:0">
+        <label>رابط السيرفر (Supabase)</label>
+        <input class="in ltr" id="loginUrl" placeholder="https://xxxx.supabase.co/functions/v1/bot">
+      </div>
+      <div class="field">
+        <label>كلمة السر</label>
+        <input class="in" type="password" id="loginPass" required>
+      </div>
+      <button class="btn btn-y btn-lg btn-full" style="margin-top:18px">دخول</button>
+    </form>
+  </div>
+</section>
+
+<!-- ===================== التطبيق ===================== -->
+<div id="appView" class="hidden">
+  <header class="top">
+    <div class="top-in">
+      <div class="logo"><i data-i="bot"></i></div>
+      <div class="brand"><b id="pageName">الرد التلقائي</b><small>التعليقات والماسنجر</small></div>
+      <div class="sp"></div>
+      <span class="pill" id="livePill">...</span>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <nav class="tabs">
+      <button data-tab="requests" class="on"><i data-i="bolt"></i>الطلبات</button>
+      <button data-tab="messenger"><i data-i="chat"></i>الماسنجر</button>
+      <button data-tab="activity"><i data-i="pulse"></i>النشاط</button>
+      <button data-tab="settings"><i data-i="gear"></i>الإعدادات</button>
+    </nav>
+
+    <!-- ===== الطلبات ===== -->
+    <section class="view on" id="tab-requests">
+      <div id="connectBox" class="hidden">
+        <div class="card empty">
+          <div class="ic"><i data-i="fb"></i></div>
+          <h2>اربط صفحتك على فيسبوك</h2>
+          <p>خطوة واحدة بس — سجل دخول بحساب فيسبوك اللي بيدير الصفحة.</p>
+          <button class="btn btn-y btn-lg" id="fbLogin"><i data-i="fb"></i>ربط صفحة فيسبوك</button>
+          <details class="more" style="text-align:right">
+            <summary>الربط بالتوكن بدل كده</summary>
+            <textarea class="in ltr mt" id="tokenIn" placeholder="EAAG..." style="min-height:70px"></textarea>
+            <button class="btn btn-g btn-sm mt" id="tokenBtn">ربط</button>
+          </details>
+        </div>
+      </div>
+
+      <div id="mainBox" class="hidden">
+        <div class="stats">
+          <div class="stat"><div class="l"><i data-i="msg"></i>تعليقات</div><div class="n" id="sComments">0</div></div>
+          <div class="stat"><div class="l"><i data-i="reply"></i>ردود</div><div class="n" id="sReplies">0</div></div>
+          <div class="stat"><div class="l"><i data-i="chat"></i>رسائل</div><div class="n" id="sMessages">0</div></div>
+        </div>
+        <button class="btn btn-y btn-lg btn-full" id="newBtn"><i data-i="plus"></i>طلب جديد</button>
+        <div id="reqList" class="mt"></div>
+      </div>
+    </section>
+
+    <!-- ===== الماسنجر ===== -->
+    <section class="view" id="tab-messenger">
+      <div class="card">
+        <div class="row"><div class="sp"><h3>رد ترحيبي تلقائي</h3><p class="sub">على أي حد يبعت رسالة للصفحة</p></div>
+          <label class="sw"><input type="checkbox" id="autoOn"><i></i></label></div>
+        <div class="field"><textarea class="in" id="autoText"></textarea>
+          <div class="hint">اكتب {first_name} مكان اسم الشخص</div></div>
+      </div>
+      <div class="card">
+        <div class="row"><div class="sp"><h3>ردود بالكلمات</h3><p class="sub">لو الرسالة فيها كلمة معينة يترد برد معين</p></div></div>
+        <div id="rules"></div>
+        <button class="btn btn-o btn-sm mt" id="addRule"><i data-i="plus"></i>إضافة رد</button>
+      </div>
+      <button class="btn btn-y btn-lg btn-full mt" id="saveDm"><i data-i="check"></i>حفظ</button>
+    </section>
+
+    <!-- ===== النشاط ===== -->
+    <section class="view" id="tab-activity">
+      <div class="card">
+        <div class="row"><h3 class="sp">آخر النشاط</h3><button class="btn btn-g btn-sm" id="pollNow"><i data-i="refresh"></i>فحص الآن</button></div>
+        <div id="logs" class="mt"></div>
+      </div>
+    </section>
+
+    <!-- ===== الإعدادات ===== -->
+    <section class="view" id="tab-settings">
+      <div class="card" id="pageCard"></div>
+      <div class="card">
+        <h3>حالة النظام</h3>
+        <div id="checks" class="mt"></div>
+      </div>
+      <div class="card">
+        <h3>بيانات تطبيق فيسبوك</h3>
+        <p class="sub">انسخ "رابط الرجوع" وحطه في Facebook Login ← Settings ← Valid OAuth Redirect URIs</p>
+        <div id="setupInfo"></div>
+      </div>
+      <button class="btn btn-o btn-full mt" id="logout"><i data-i="logout"></i>تسجيل خروج</button>
+    </section>
+  </div>
+</div>
+
+<!-- ===================== نموذج الطلب ===================== -->
+<div class="sheet-bg" id="sheetBg"></div>
+<div class="sheet" id="sheet">
+  <div class="grab"></div>
+  <div class="sheet-h"><h2 id="sheetTitle">طلب جديد</h2><button class="ibtn" id="sheetX"><i data-i="x"></i></button></div>
+  <div class="sheet-b">
+    <!-- 1 -->
+    <div class="step">
+      <div class="step-h"><span class="num">1</span><b>اختار الفيديو أو المنشور</b>
+        <label class="sw y small"><input type="checkbox" id="fAll"><i></i>الكل</label></div>
+      <div id="postsArea">
+        <div class="posts" id="posts"></div>
+        <div class="or">أو الصق الرابط</div>
+        <div class="row"><input class="in ltr" id="fUrl" placeholder="https://facebook.com/.../videos/..."><button class="btn btn-g" id="addUrl">إضافة</button></div>
+        <div class="chosen" id="chosen"></div>
+      </div>
+    </div>
+    <!-- 2 -->
+    <div class="step">
+      <div class="step-h"><span class="num">2</span><b>الكلمة اللي الناس هتكتبها</b>
+        <label class="sw y small"><input type="checkbox" id="fAny"><i></i>أي تعليق</label></div>
+      <div class="field" id="kwField"><input class="in" id="fKeywords" placeholder="مهتم، شرح، تداول">
+        <div class="hint">افصل بين الكلمات بفاصلة — "مُهتممم" و "مهتم" نفس الكلمة</div></div>
+    </div>
+    <!-- 3 -->
+    <div class="step">
+      <div class="step-h"><span class="num">3</span><b>الرد على التعليق</b><label class="sw"><input type="checkbox" id="fReplyOn" checked><i></i></label></div>
+      <div class="field" id="replyField"><textarea class="in" id="fReplies"></textarea>
+        <div class="hint">كل سطر = رد مختلف، والنظام بيختار واحد عشوائي كل مرة · {first_name} = اسم الشخص</div></div>
+    </div>
+    <!-- 4 -->
+    <div class="step">
+      <div class="step-h"><span class="num">4</span><b>رسالة الماسنجر</b><label class="sw"><input type="checkbox" id="fDmOn" checked><i></i></label></div>
+      <div id="dmField">
+        <div class="field"><textarea class="in" id="fDm" style="min-height:120px"></textarea></div>
+        <details class="more" id="btnDetails"><summary>+ إضافة زرار برابط (اختياري)</summary>
+          <div class="row mt"><input class="in" id="fBtnTitle" maxlength="20" placeholder="اسم الزرار"><input class="in ltr" id="fBtnUrl" placeholder="https://..."></div>
+        </details>
+      </div>
+    </div>
+    <div class="step">
+      <label class="sw" style="width:100%"><span class="sp"><b>لايك على التعليق</b></span><input type="checkbox" id="fLike" checked><i></i></label>
+      <label class="sw mt" style="width:100%"><span class="sp"><b>رد واحد بس لكل شخص</b><br><span class="small muted">لو علّق أكتر من مرة ميتردش عليه تاني</span></span><input type="checkbox" id="fOnce" checked><i></i></label>
+    </div>
+    <div class="field"><label>اسم الطلب (اختياري)</label><input class="in" id="fName" placeholder="مثال: فيديو شرح التداول"></div>
+  </div>
+  <div class="sheet-f"><button class="btn btn-y btn-lg btn-full" id="saveReq"><i data-i="rocket"></i>تشغيل الطلب</button></div>
+</div>
+
+<!-- اختيار الصفحة -->
+<div class="sheet-bg" id="pickBg"></div>
+<div class="sheet" id="pickSheet">
+  <div class="grab"></div>
+  <div class="sheet-h"><h2>اختار صفحتك</h2></div>
+  <div class="sheet-b" id="pickList" style="padding-bottom:30px"></div>
+</div>
+
+<div class="toast-box" id="toasts"></div>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

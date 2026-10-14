@@ -325,7 +325,27 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#changePage')) fbLogin(e.target.closest('#changePage'));
   if (e.target.closest('#disc') && confirm('الطلبات هتقف لحد ما تربط الصفحة تاني. متأكد؟')) api('/fb/disconnect', 'POST').then(() => { toast('اتفصلت'); renderSettings(); });
 });
-$('#logout').onclick = () => { store.del('pass'); PASS = ''; showLogin(); };
+// تسجيل الخروج بس لما إنت تدوس بنفسك (الصفحة نفسها بتفضل مربوطة على السيرفر وشغالة)
+$('#logout').onclick = () => {
+  if (!confirm('متأكد إنك عايز تسجل خروج من التطبيق؟\n(الطلبات هتفضل شغالة عادي على السيرفر)')) return;
+  store.del('pass'); PASS = ''; showLogin();
+};
+
+// ---------- تطبيق الموبايل ----------
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+let installEvent = null;
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+function renderInstall() {
+  $('#installedHint').classList.toggle('hidden', !standalone);
+  $('#installBtn').classList.toggle('hidden', standalone || !installEvent);
+  $('#iosHint').classList.toggle('hidden', standalone || !isIOS);
+  $('#androidHint').classList.toggle('hidden', standalone || isIOS || !!installEvent);
+}
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvent = e; renderInstall(); });
+addEventListener('appinstalled', () => { installEvent = null; toast('تم تثبيت التطبيق ✓'); renderInstall(); });
+$('#installBtn').onclick = async () => { if (!installEvent) return; installEvent.prompt(); await installEvent.userChoice; installEvent = null; renderInstall(); };
+renderInstall();
 
 // ---------- ربط فيسبوك ----------
 function fbLogin(btn) {

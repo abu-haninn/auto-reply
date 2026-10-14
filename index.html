@@ -5,7 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>الرد التلقائي</title>
   <meta name="theme-color" content="#0B0E11">
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23FCD535'/%3E%3Cpath d='M8 9h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-5 4v-4H8a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z' fill='%23181A20'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" href="icon-192.png">
+  <!-- تطبيق على الموبايل -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="الرد التلقائي">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -114,6 +121,13 @@
         <h3>بيانات تطبيق فيسبوك</h3>
         <p class="sub">انسخ "رابط الرجوع" وحطه في Facebook Login ← Settings ← Valid OAuth Redirect URIs</p>
         <div id="setupInfo"></div>
+      </div>
+      <div class="card" id="installCard">
+        <div class="row"><img src="icon-192.png" alt="" style="width:52px;height:52px;border-radius:14px"><div class="sp"><h3>ثبّت التطبيق على موبايلك</h3><p class="sub">يفتح من أيقونة على الشاشة الرئيسية زي أي تطبيق</p></div></div>
+        <button class="btn btn-y btn-full mt hidden" id="installBtn"><i data-i="plus"></i>تثبيت التطبيق</button>
+        <div class="note mt hidden" id="iosHint">على الآيفون: افتح الموقع من <b>Safari</b> ← دوس زرار المشاركة <b>⬆️</b> تحت ← اختار <b>"إضافة إلى الشاشة الرئيسية"</b>.</div>
+        <div class="note mt hidden" id="androidHint">على أندرويد: افتح الموقع من <b>Chrome</b> ← دوس القايمة <b>⋮</b> فوق ← اختار <b>"تثبيت التطبيق"</b> أو <b>"إضافة إلى الشاشة الرئيسية"</b>.</div>
+        <div class="note mt hidden" id="installedHint" style="background:var(--green-soft);border-color:rgba(14,203,129,.3);color:var(--green)">✅ إنت فاتح التطبيق المتسطب دلوقتي</div>
       </div>
       <button class="btn btn-o btn-full mt" id="logout"><i data-i="logout"></i>تسجيل خروج</button>
     </section>

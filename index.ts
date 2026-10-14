@@ -113,12 +113,30 @@ function explain(e: any) {
   return e?.message || 'خطأ غير معروف';
 }
 type Btn = { title: string; url: string };
-// الأزرار اللي جوه الرسالة: زرار الشرح (لو موجود) + زرار "تابع الصفحة" (اقتراح بس، مش شرط)
-function messageButtons(pageId: string, btnTitle?: string | null, btnUrl?: string | null, follow = true): Btn[] {
-  const out: Btn[] = [];
-  if (btnTitle && btnUrl) out.push({ title: btnTitle, url: btnUrl });
-  if (follow) out.push({ title: '👍 تابع الصفحة', url: `https://www.facebook.com/${pageId}` });
-  return out;
+// الروابط اللي جوه رسالة الأزرار مش بتبقى قابلة للضغط في ماسنجر — فبنحولها لأزرار
+const URL_RE = /https?:\/\/[^\s<>"'،]+/g;
+function linkTitle(u: string, n: number, total: number) {
+  const video = /youtu\.?be|youtube\.com|facebook\.com\/.*(videos|reel|watch)|fb\.watch|tiktok\.com|instagram\.com\/reel/i.test(u);
+  const base = video ? '▶️ شاهد الفيديو' : '🔗 افتح الرابط';
+  return total > 1 ? `${base} ${n}` : base;
+}
+// زرار المتابعة بيفتح صفحة صغيرة على موقعك بتفتح صفحتك جوه تطبيق فيسبوك (مش المتصفح)
+function followUrl(pageId: string, site?: string | null) {
+  const base = String(site || '').split('#')[0].split('?')[0];
+  return /^https:\/\//.test(base) ? `${base.replace(/[^/]*$/, '')}open.html?id=${pageId}` : `https://www.facebook.com/${pageId}`;
+}
+function dmParts(text: string, pageId: string, btnTitle?: string | null, btnUrl?: string | null, follow = true, site?: string | null) {
+  const links = [...new Set((text.match(URL_RE) || []).map((u) => u.replace(/[).,!؟?]+$/, '')))];
+  const buttons: Btn[] = [];
+  if (btnTitle && btnUrl) buttons.push({ title: btnTitle, url: btnUrl });
+  const room = 3 - buttons.length - (follow ? 1 : 0);
+  const asButtons = links.filter((u) => !buttons.some((b) => b.url === u)).slice(0, Math.max(0, room));
+  asButtons.forEach((u, i) => buttons.push({ title: linkTitle(u, i + 1, asButtons.length), url: u }));
+  if (follow) buttons.push({ title: '👍 تابع الصفحة', url: followUrl(pageId, site) });
+  let body = text;
+  for (const u of asButtons) body = body.split(u).join('👇');
+  body = body.replace(/(👇\s*)+/g, '👇 ').replace(/\n{3,}/g, '\n\n').trim();
+  return { text: body || '👇', buttons };
 }
 function buildMessage(text: string, buttons: Btn[] = []) {
   if (buttons.length) {
@@ -128,12 +146,13 @@ function buildMessage(text: string, buttons: Btn[] = []) {
 }
 // لو الأزرار اترفضت لأي سبب نبعت نص عادي فيه الروابط
 const plainWithLinks = (text: string, buttons: Btn[]) => ({ text: cut([text, ...buttons.map((b) => `${b.title}: ${b.url}`)].join('\n'), 2000) });
-async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, buttons: Btn[] = []) {
+// original = النص الأصلي بالروابط (لو الأزرار اترفضت بنبعته نص عادي والروابط فيه بتبقى قابلة للضغط)
+async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, buttons: Btn[] = [], original = text) {
   try {
     return await fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: buildMessage(text, buttons) }, token);
   } catch (e) {
     if (!buttons.length) throw e;
-    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: plainWithLinks(text, buttons) }, token);
+    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: plainWithLinks(original, buttons.filter((b) => !original.includes(b.url))) }, token);
   }
 }
 async function recentPosts(pageId: string, token: string, limit = 24) {
@@ -223,7 +242,7 @@ function findCampaign(campaigns: any[], postId: string, message: string) {
 // =====================================================================
 //  الرد الذكي (Google Gemini — فيه حصة مجانية): رد مناسب لكلام كل شخص
 // =====================================================================
-const FALLBACK_REPLY = 'شكرًا يا {first_name} ❤️ بعتلك التفاصيل على الخاص 📩';
+const FALLBACK_REPLY = 'عينيا ليك ❤️ بعتلك التفاصيل على الخاص 📩';
 async function smartReply(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
   try { return await generateSmart(comment, name, pageName, topic, dmSent); }
   catch (e) { await log('error', `⚠️ الرد الذكي: ${(e as Error).message} — اتبعت رد عادي بداله`); return ''; }
@@ -232,20 +251,20 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   const key = env('GEMINI_API_KEY');
   if (!key) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
   if (!comment.trim()) return '';
-  const first = (name || '').trim().split(/\s+/)[0] || '';
+  void name; // الاسم مش بيتبعت للذكاء الاصطناعي ومش بيتكتب في الرد
   const system = [
-    `إنت أدمن صفحة فيسبوك اسمها "${pageName}" وبترد على تعليقات المتابعين بنفسك.`,
-    'اكتب رد واحد بس باللهجة المصرية، جملة أو جملتين قصيرين (أقل من 25 كلمة).',
-    'الرد لازم يكون مناسب ومرتبط بكلام الشخص نفسه، دافي وطبيعي زي إنسان مش بوت، ومختلف كل مرة.',
-    first
-      ? `اسم الشخص "${name}". اعرف من الاسم هو راجل ولا ست وكلّمه بالصيغة الصح: للراجل (منور، يا ${first}، بعتلك، حبيبي) وللست (منورة، يا ${first}، بعتلِك) — ومن غير أي كلام فيه مجاملة شخصية أو تلميح، خليك محترم. ناديه باسمه الأول "${first}" في الغالب. لو الاسم مش واضح راجل ولا ست استخدم صيغة تنفع للاتنين.`
-      : 'اسم الشخص مش معروف — استخدم صيغة تنفع للراجل والست ومتخترعش اسم.',
-    dmSent ? 'لازم الرد يخلص بإنك بعتله الشرح/التفاصيل على الخاص (الماسنجر).' : '',
-    'ممنوع: روابط، هاشتاجات، أكتر من إيموجي أو اتنين، وعود بحاجات مش مذكورة، أو إنك تقول إنك ذكاء اصطناعي.',
-    'لو التعليق فيه إساءة أو كلام مش لطيف رد بأدب وهدوء من غير جدال.',
+    `إنت صاحب صفحة فيسبوك "${pageName}" وبترد بنفسك على تعليقات المتابعين، كأنك بتدردش معاهم.`,
+    'رد على كلام الشخص بالظبط زي ما شات جي بي تي بيرد على أي رسالة: لو سلّم رد السلام ("وعليكم السلام، منور/نورت")، لو سأل جاوب، لو شكرك اشكره، لو كتب "تم" أو حاجة قصيرة رد رد قصير لطيف.',
+    'باللهجة المصرية العامية، من جملة لتلات جمل بالكتير، طبيعي ودافي زي إنسان مش بوت، ومختلف كل مرة.',
+    'متكتبش اسم الشخص خالص ومتناديهوش باسمه. استخدم كلام ينفع للراجل والست.',
+    dmSent
+      ? 'لو الشخص مهتم أو طالب الرابط/الشرح/التفاصيل/التفعيل قوله إنك هتبعتهوله على الخاص (مثلًا: "عينيا ليك، هبعتلك الرابط على الخاص"). لو كلامه سلام أو شكر أو سؤال عادي رد عليه وبس من غير ما تفرض موضوع الخاص.'
+      : 'متقولش إنك هتبعت حاجة على الخاص.',
+    'ممنوع: روابط، هاشتاجات، أكتر من إيموجي واحد، وعود بحاجات مش مذكورة في موضوع المنشور، أو إنك تقول إنك ذكاء اصطناعي أو بوت.',
+    'لو التعليق فيه إساءة رد بأدب وهدوء من غير جدال.',
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
-  ].filter(Boolean).join('\n');
-  const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nتعليق ${first || 'متابع'}: ${cut(comment, 400)}`;
+  ].join('\n');
+  const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nالتعليق: ${cut(comment, 400)}`;
   // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
   const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
   let lastErr = '';
@@ -357,7 +376,8 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
     if (text && dmAllowed) {
       await waitUntil(Math.max(replyAt, Date.now()) + rand(TIMING.dm));
       try {
-        const r = await sendPrivateReply(s.page_id, cm.commentId, text, s.page_token, messageButtons(s.page_id, c.button_title, c.button_url, c.follow_button !== false));
+        const parts = dmParts(text, s.page_id, c.button_title, c.button_url, c.follow_button !== false, s.return_to);
+        const r = await sendPrivateReply(s.page_id, cm.commentId, parts.text, s.page_token, parts.buttons, text);
         await bump(c.id, 'messaged');
         if (r?.recipient_id) await db.from('dm_sent').upsert({ psid: r.recipient_id, at: new Date().toISOString() });
         await log('dm', `📩 رسالة ماسنجر اتبعتت لـ ${who}`);
@@ -369,9 +389,11 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
 async function handleMessage(psid: string, text: string, s: any) {
   if (!s.page_id || !s.page_token || psid === s.page_id) return;
   const nameOf = async () => { try { const r = await fb('GET', `/${psid}`, { fields: 'name,first_name' }, s.page_token); return r.name || r.first_name || ''; } catch { return ''; } };
-  const buttons = messageButtons(s.page_id, null, null, s.dm_follow_button !== false);
-  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: buildMessage(msg, buttons) }, s.page_token)
-    .catch(() => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: plainWithLinks(msg, buttons) }, s.page_token));
+  const send = (msg: string) => {
+    const p = dmParts(msg, s.page_id, null, null, s.dm_follow_button !== false, s.return_to);
+    return fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: buildMessage(p.text, p.buttons) }, s.page_token)
+      .catch(() => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: plainWithLinks(msg, p.buttons.filter((b) => !msg.includes(b.url))) }, s.page_token));
+  };
 
   const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
   for (const r of rules || []) {

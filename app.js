@@ -171,13 +171,18 @@ async function loadRequests() {
         <div class="center"><label class="sw"><input type="checkbox" data-toggle="${c.id}" ${c.active ? 'checked' : ''}><i></i></label>
           <div class="status-txt ${c.active ? 'on' : 'off'}">${c.active ? 'شغال' : 'متوقف'}</div></div>
       </div>
-      <div class="req-nums"><div><b>${num(c.matched)}</b><small>تعليق</small></div><div><b>${num(c.replied)}</b><small>رد</small></div><div><b>${num(c.messaged)}</b><small>رسالة</small></div></div>
-      <div class="row"><span class="small muted sp">${c.all_posts ? 'كل المنشورات' : `${num((c.posts || []).length)} منشور`}${c.errors ? ` · <span style="color:var(--red)">${num(c.errors)} خطأ</span>` : ''}</span>
+      <div class="req-nums">${[['matched', 'تعليق', 'msg'], ['replied', 'رد', 'reply'], ['messaged', 'رسالة ماسنجر', 'chat']].map(([k, l, ic]) => {
+        const changed = PREV[c.id] && PREV[c.id][k] !== c[k];
+        return `<div class="${changed ? 'bump' : ''}">${icon(ic)}<b>${num(c[k])}</b><small>${l}</small></div>`;
+      }).join('')}</div>
+      <div class="row"><span class="small muted sp">${c.all_posts ? 'كل المنشورات' : `${num((c.posts || []).length)} منشور`}${c.active ? ' · <span class="live-dot"></span> بيتحدث لوحده' : ''}</span>
         <button class="btn btn-g btn-sm" data-edit="${c.id}">${icon('edit')}تعديل</button>
         <button class="ibtn" data-del="${c.id}" title="حذف">${icon('trash')}</button></div>
     </div>`;
   }).join('');
+  PREV = Object.fromEntries(REQS.map((c) => [c.id, { matched: c.matched, replied: c.replied, messaged: c.messaged }]));
 }
+let PREV = {};
 
 $('#reqList').addEventListener('change', async (e) => {
   const id = e.target.dataset.toggle; if (!id) return;
@@ -196,8 +201,8 @@ $('#reqList').addEventListener('click', async (e) => {
 
 // ---------- نموذج الطلب ----------
 const F = { id: null, posts: [], pagePosts: null };
-const DEF_REPLIES = 'شكرًا على تعليقك يا {first_name} ❤️ تم إرسال الشرح على الخاص 📩\n{تم|اتبعت} الشرح على الماسنجر يا {first_name} 🙏 شيك على رسائلك\nوصلك الشرح على الخاص يا {first_name} ✅';
-const DEF_DM = 'أهلاً يا {first_name} 👋\nشكرًا لاهتمامك! ده الشرح اللي طلبته:\n\n';
+const DEF_REPLIES = 'عينيا ليك ❤️ بعتلك التفاصيل على الخاص 📩\nمنور، شيك على الماسنجر 🙏\nتم، بعتلك كل حاجة على الخاص ✅';
+const DEF_DM = 'أهلاً بيك 👋\nشكرًا لاهتمامك! ده الرابط اللي طلبته:\n\n';
 const tail = (id) => String(id).split('_').pop();
 
 function syncDims() {
@@ -210,7 +215,9 @@ function syncDims() {
 function syncSmart() {
   const on = $('#fSmart').checked;
   $('#aiMissing').classList.toggle('hidden', !on || !ST || ST.aiReady);
-  $('#repliesLabel').textContent = on ? 'ردود احتياطية (لو الرد الذكي اتعطل)' : 'الردود';
+  $('#repliesLabel').textContent = on ? 'ردود احتياطية (لو الرد الذكي اتعطل)' : 'الردود اللي هتتكتب على التعليقات';
+  $('#repliesBox').open = !on;
+  $('#aiTestRow').classList.toggle('hidden', !on);
 }
 $('#fSmart').onchange = syncSmart;
 // تجربة الرد الذكي قبل التشغيل
@@ -454,7 +461,13 @@ async function start() {
   if (hash === 'pick-page') showPicker();
   loadRequests();
 }
-setInterval(() => { if (!document.hidden && PASS && !$('#appView').classList.contains('hidden')) { loadStatus().catch(() => {}); if ($('#tab-activity').classList.contains('on')) loadLogs(); } }, 15000);
+// تحديث تلقائي كل 10 ثواني: الأرقام والطلبات والنشاط
+setInterval(() => {
+  if (document.hidden || !PASS || $('#appView').classList.contains('hidden')) return;
+  loadStatus().catch(() => {});
+  if ($('#tab-requests').classList.contains('on') && !$('#sheet').classList.contains('on')) loadRequests();
+  if ($('#tab-activity').classList.contains('on')) loadLogs();
+}, 10000);
 
 paint();
 if (SERVER && PASS) start(); else showLogin();

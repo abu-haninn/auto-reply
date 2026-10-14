@@ -161,7 +161,12 @@ textarea.in { min-height: 96px; resize: vertical; line-height: 1.75; }
 .req-nums { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--surface-2); border-radius: 14px; }
 .req-nums div { text-align: center; padding: 10px 4px; }
 .req-nums div + div { border-right: 1px solid var(--border); }
-.req-nums b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.req-nums b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.req-nums svg { width: 16px; height: 16px; color: var(--yellow); display: block; margin: 0 auto 2px; }
+.req-nums div { border-radius: 14px; transition: background .4s; }
+.req-nums div.bump { animation: bump 1.6s ease; }
+@keyframes bump { 0% { background: rgba(14, 203, 129, .35); transform: scale(1.06); } 100% { background: transparent; transform: none; } }
+.live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 0 rgba(14, 203, 129, .6); animation: pulse 2s infinite; vertical-align: middle; }
 .req-nums small { color: var(--muted); font-size: 12px; }
 .status-txt { font-size: 13px; font-weight: 700; }
 .status-txt.on { color: var(--green); }

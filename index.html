@@ -170,19 +170,22 @@
     <div class="step">
       <div class="step-h"><span class="num">3</span><b>الرد على التعليق</b><label class="sw"><input type="checkbox" id="fReplyOn" checked><i></i></label></div>
       <div id="replyField">
-        <label class="sw mt" style="width:100%"><span class="sp"><b>✨ رد ذكي مناسب لكلام كل شخص</b><br><span class="small muted">كل تعليق ياخد رد مختلف على حسب اللي كتبه، وفي الآخر يقوله "بعتلك على الخاص"</span></span><input type="checkbox" id="fSmart" checked><i></i></label>
-        <div class="note mt hidden" id="aiMissing">الرد الذكي محتاج مفتاح Gemini المجاني يتحط مرة واحدة — لحد ما يتحط هيستخدم الردود اللي تحت.</div>
+        <label class="sw mt" style="width:100%"><span class="sp"><b>✨ رد ذكي على كلام كل شخص</b><br><span class="small muted">بيرد كأنك إنت اللي بترد، على حسب اللي الشخص كتبه</span></span><input type="checkbox" id="fSmart" checked><i></i></label>
+        <div class="note mt hidden" id="aiMissing">الرد الذكي محتاج مفتاح Gemini — لحد ما يتحط هيستخدم الردود الاحتياطية.</div>
         <div class="row mt" id="aiTestRow"><input class="in" id="aiTestIn" placeholder="جرّب: اكتب تعليق زي ما متابع هيكتبه"><button class="btn btn-g" id="aiTestBtn">✨ جرّب</button></div>
         <div class="note mt hidden" id="aiTestOut" style="background:var(--surface);color:var(--text);border-color:var(--border-2)"></div>
-        <div class="field"><label id="repliesLabel">ردود احتياطية (لو الرد الذكي اتعطل)</label><textarea class="in" id="fReplies"></textarea>
-        <div class="hint">كل سطر = رد مختلف، والنظام بيختار واحد عشوائي كل مرة · {first_name} = اسم الشخص</div></div>
+        <details class="more" id="repliesBox"><summary id="repliesLabel">ردود احتياطية (لو الرد الذكي اتعطل)</summary>
+          <div class="field"><textarea class="in" id="fReplies"></textarea>
+          <div class="hint">كل سطر = رد مختلف، والنظام بيختار واحد عشوائي</div></div>
+        </details>
       </div>
     </div>
     <!-- 4 -->
     <div class="step">
       <div class="step-h"><span class="num">4</span><b>رسالة الماسنجر</b><label class="sw"><input type="checkbox" id="fDmOn" checked><i></i></label></div>
       <div id="dmField">
-        <div class="field"><textarea class="in" id="fDm" style="min-height:120px"></textarea></div>
+        <div class="field"><textarea class="in" id="fDm" style="min-height:120px"></textarea>
+          <div class="hint">🔗 أي رابط تكتبه هنا (فيديو، يوتيوب، موقع) بيتحول لزرار يتداس عليه ويفتح على طول</div></div>
         <details class="more" id="btnDetails"><summary>+ إضافة زرار برابط (اختياري)</summary>
           <div class="row mt"><input class="in" id="fBtnTitle" maxlength="20" placeholder="اسم الزرار"><input class="in ltr" id="fBtnUrl" placeholder="https://..."></div>
         </details>
@@ -191,7 +194,7 @@
     </div>
     <div class="step">
       <label class="sw" style="width:100%"><span class="sp"><b>لايك على التعليق</b></span><input type="checkbox" id="fLike" checked><i></i></label>
-      <label class="sw mt" style="width:100%"><span class="sp"><b>رد واحد بس لكل شخص</b><br><span class="small muted">لو علّق أكتر من مرة ميتردش عليه تاني</span></span><input type="checkbox" id="fOnce" checked><i></i></label>
+      <input type="checkbox" id="fOnce" checked hidden><!-- رد واحد لكل شخص: دايمًا شغال للأمان -->
     </div>
     <div class="field"><label>اسم الطلب (اختياري)</label><input class="in" id="fName" placeholder="مثال: فيديو شرح التداول"></div>
   </div>

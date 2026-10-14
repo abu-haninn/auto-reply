@@ -407,8 +407,27 @@ async function pagesFromUserToken(userToken: string) {
   if (env('FB_APP_ID') && env('FB_APP_SECRET')) {
     try { token = (await fb('GET', '/oauth/access_token', { grant_type: 'fb_exchange_token', client_id: env('FB_APP_ID'), client_secret: env('FB_APP_SECRET'), fb_exchange_token: userToken })).access_token || userToken; } catch { /* */ }
   }
-  const r = await fb('GET', '/me/accounts', { fields: 'id,name,access_token,picture{url}', limit: 100 }, token);
-  return (r.data || []).map((p: any) => ({ id: p.id, name: p.name, token: p.access_token, picture: p.picture?.data?.url }));
+  const pages = new Map<string, any>();
+  try {
+    const r = await fb('GET', '/me/accounts', { fields: 'id,name,access_token,picture{url}', limit: 100 }, token);
+    for (const p of r.data || []) pages.set(p.id, { id: p.id, name: p.name, token: p.access_token, picture: p.picture?.data?.url });
+  } catch { /* */ }
+  // الصفحات اللي بتتدار من حافظة أعمال مش بتظهر في /me/accounts — نجيبها من الصلاحيات اللي الشخص وافق عليها
+  if (env('FB_APP_ID') && env('FB_APP_SECRET')) {
+    try {
+      const d = await fb('GET', '/debug_token', { input_token: token }, `${env('FB_APP_ID')}|${env('FB_APP_SECRET')}`);
+      const ids = new Set<string>();
+      for (const g of d.data?.granular_scopes || []) if (String(g.scope).startsWith('pages_')) for (const id of g.target_ids || []) ids.add(String(id));
+      for (const id of ids) {
+        if (pages.has(id)) continue;
+        try {
+          const p = await fb('GET', `/${id}`, { fields: 'id,name,access_token,picture{url}' }, token);
+          if (p.access_token) pages.set(p.id, { id: p.id, name: p.name, token: p.access_token, picture: p.picture?.data?.url });
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+  }
+  return [...pages.values()];
 }
 
 async function api(req: Request, path: string): Promise<Response> {

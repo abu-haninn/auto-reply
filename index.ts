@@ -225,8 +225,13 @@ function findCampaign(campaigns: any[], postId: string, message: string) {
 // =====================================================================
 const FALLBACK_REPLY = 'شكرًا يا {first_name} ❤️ بعتلك التفاصيل على الخاص 📩';
 async function smartReply(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
+  try { return await generateSmart(comment, name, pageName, topic, dmSent); }
+  catch (e) { await log('error', `⚠️ الرد الذكي: ${(e as Error).message} — اتبعت رد عادي بداله`); return ''; }
+}
+async function generateSmart(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
   const key = env('GEMINI_API_KEY');
-  if (!key || !comment.trim()) return '';
+  if (!key) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
+  if (!comment.trim()) return '';
   const first = (name || '').trim().split(/\s+/)[0] || '';
   const system = [
     `إنت أدمن صفحة فيسبوك اسمها "${pageName}" وبترد على تعليقات المتابعين بنفسك.`,
@@ -239,7 +244,7 @@ async function smartReply(comment: string, name: string, pageName: string, topic
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
   const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nتعليق ${first || 'متابع'}: ${cut(comment, 400)}`;
-  try {
+  {
     const model = env('GEMINI_MODEL') || 'gemini-2.5-flash';
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
@@ -252,13 +257,10 @@ async function smartReply(comment: string, name: string, pageName: string, topic
       signal: AbortSignal.timeout(15_000),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { await log('error', `⚠️ الرد الذكي: ${data?.error?.message || res.status} — اتبعت رد عادي بداله`); return ''; }
+    if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
     let text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('').trim();
     text = text.replace(/^["'«“]+|["'»”]+$/g, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').trim();
     return text.length >= 3 ? cut(text, 300) : '';
-  } catch (e) {
-    await log('error', `⚠️ الرد الذكي: ${(e as Error).message} — اتبعت رد عادي بداله`);
-    return '';
   }
 }
 
@@ -693,6 +695,13 @@ async function api(req: Request, path: string): Promise<Response> {
   if (path === '/logs' && method === 'GET') {
     const { data } = await db.from('logs').select('*').order('at', { ascending: false }).limit(80);
     return json({ logs: data || [] });
+  }
+  // تجربة الرد الذكي من لوحة التحكم (من غير ما يتنشر حاجة)
+  if (path === '/ai-test' && method === 'POST') {
+    try {
+      const text = await generateSmart(String(body.comment || ''), String(body.name || 'أحمد محمد'), cur?.name || 'صفحتك', String(body.topic || ''), body.dm !== false);
+      return json({ ok: !!text, text });
+    } catch (e) { return json({ ok: false, error: (e as Error).message }); }
   }
   if (path === '/poll-now' && method === 'POST') {
     return json(await poll(true));

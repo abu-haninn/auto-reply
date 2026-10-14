@@ -172,6 +172,8 @@
       <div id="replyField">
         <label class="sw mt" style="width:100%"><span class="sp"><b>✨ رد ذكي مناسب لكلام كل شخص</b><br><span class="small muted">كل تعليق ياخد رد مختلف على حسب اللي كتبه، وفي الآخر يقوله "بعتلك على الخاص"</span></span><input type="checkbox" id="fSmart" checked><i></i></label>
         <div class="note mt hidden" id="aiMissing">الرد الذكي محتاج مفتاح Gemini المجاني يتحط مرة واحدة — لحد ما يتحط هيستخدم الردود اللي تحت.</div>
+        <div class="row mt" id="aiTestRow"><input class="in" id="aiTestIn" placeholder="جرّب: اكتب تعليق زي ما متابع هيكتبه"><button class="btn btn-g" id="aiTestBtn">✨ جرّب</button></div>
+        <div class="note mt hidden" id="aiTestOut" style="background:var(--surface);color:var(--text);border-color:var(--border-2)"></div>
         <div class="field"><label id="repliesLabel">ردود احتياطية (لو الرد الذكي اتعطل)</label><textarea class="in" id="fReplies"></textarea>
         <div class="hint">كل سطر = رد مختلف، والنظام بيختار واحد عشوائي كل مرة · {first_name} = اسم الشخص</div></div>
       </div>

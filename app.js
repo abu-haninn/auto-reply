@@ -213,6 +213,17 @@ function syncSmart() {
   $('#repliesLabel').textContent = on ? 'ردود احتياطية (لو الرد الذكي اتعطل)' : 'الردود';
 }
 $('#fSmart').onchange = syncSmart;
+// تجربة الرد الذكي قبل التشغيل
+$('#aiTestBtn').onclick = (e) => busy(e.currentTarget, async () => {
+  const comment = $('#aiTestIn').value.trim() || 'مهتم جدا ممكن الشرح';
+  const topic = [$('#fName').value, ...F.posts.map((p) => p.text)].filter(Boolean).join(' — ');
+  const r = await api('/ai-test' + pq(), 'POST', { comment, topic, dm: $('#fDmOn').checked });
+  const out = $('#aiTestOut');
+  out.classList.remove('hidden');
+  out.innerHTML = r.ok
+    ? `<div class="small muted">💬 المتابع: ${esc(comment)}</div><div style="margin-top:6px">↩️ <b>${esc(r.text)}</b></div>`
+    : `<span style="color:var(--red)">الرد الذكي مش شغال: ${esc(r.error || 'رد فاضي')}</span>`;
+});
 
 function openSheet(c) {
   F.id = c ? c.id : null;

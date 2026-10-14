@@ -266,9 +266,12 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   ].join('\n');
   const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nالتعليق: ${cut(comment, 400)}`;
   // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
-  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
+  const list = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean))] as string[];
+  // لو كله مشغول بنستنى شوية ونجرب تاني (الرد أصلًا بيتأخر دقيقة فعندنا وقت)
+  const models = [...list, '__wait__', ...list, '__wait__', ...list];
   let lastErr = '';
   for (const model of models) {
+    if (model === '__wait__') { await sleep(4000); continue; }
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },

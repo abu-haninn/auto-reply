@@ -99,9 +99,15 @@ $('#loginForm').onsubmit = (e) => {
 let ST = null;
 let REQS = [];
 
+// الصفحة اللي شغالين عليها دلوقتي (لو عندك أكتر من صفحة)
+let CUR_PAGE = store.get('page');
+const pq = () => (CUR_PAGE ? `?page=${encodeURIComponent(CUR_PAGE)}` : '');
+
 async function loadStatus() {
-  ST = await api('/status');
+  ST = await api('/status' + pq());
+  if (!ST.pages.some((p) => p.id === CUR_PAGE)) { CUR_PAGE = ST.page ? ST.page.id : ''; store.set('page', CUR_PAGE); }
   const page = ST.page;
+  renderPageSwitch();
   $('#pageName').textContent = page ? page.name : 'الرد التلقائي';
   $('#connectBox').classList.toggle('hidden', !!page);
   $('#mainBox').classList.toggle('hidden', !page);
@@ -109,10 +115,24 @@ async function loadStatus() {
   const pill = $('#livePill');
   pill.className = 'pill ' + (live ? 'on' : 'off');
   pill.innerHTML = live ? '<span class="pulse"></span>شغال 24 ساعة' : page ? 'مفيش طلبات شغالة' : 'الصفحة مش مربوطة';
-  $('#sComments').textContent = num(ST.totals.comments);
-  $('#sReplies').textContent = num(ST.totals.replies);
-  $('#sMessages').textContent = num(ST.totals.messages);
+  if (ST.pages.length < 2) {
+    $('#sComments').textContent = num(ST.totals.comments);
+    $('#sReplies').textContent = num(ST.totals.replies);
+    $('#sMessages').textContent = num(ST.totals.messages);
+  }
 }
+function renderPageSwitch() {
+  const box = $('#pageSwitch');
+  box.classList.toggle('hidden', ST.pages.length < 2);
+  box.innerHTML = ST.pages.map((p) => `<button data-page="${p.id}" class="${p.id === CUR_PAGE ? 'on' : ''}"><img src="${esc(p.picture || '')}" alt="">${esc(p.name)}</button>`).join('');
+}
+$('#pageSwitch').onclick = async (e) => {
+  const b = e.target.closest('[data-page]'); if (!b || b.dataset.page === CUR_PAGE) return;
+  CUR_PAGE = b.dataset.page; store.set('page', CUR_PAGE); F.pagePosts = null;
+  await loadStatus().catch(() => {}); loadRequests();
+};
+// الطلبات القديمة اللي مالهاش صفحة تبع أول صفحة
+const reqPage = (c) => c.page_id || (ST && ST.pages[0] ? ST.pages[0].id : '');
 
 // ---------- التبويبات ----------
 function tab(name) {
@@ -129,6 +149,13 @@ $$('nav.tabs button').forEach((b) => (b.onclick = () => tab(b.dataset.tab)));
 // ---------- الطلبات ----------
 async function loadRequests() {
   try { REQS = (await api('/campaigns')).campaigns; } catch { return; }
+  if (ST && ST.pages.length > 1) {
+    REQS = REQS.filter((c) => reqPage(c) === CUR_PAGE);
+    const sum = (k) => REQS.reduce((a, c) => a + (c[k] || 0), 0);
+    $('#sComments').textContent = num(sum('matched'));
+    $('#sReplies').textContent = num(sum('replied'));
+    $('#sMessages').textContent = num(sum('messaged'));
+  }
   const box = $('#reqList');
   if (!REQS.length) {
     box.innerHTML = `<div class="card empty"><div class="ic">${icon('rocket')}</div><h2>اعمل أول طلب</h2><p>اختار الفيديو، اكتب الكلمة زي "مهتم"، واكتب الرد ورسالة الماسنجر — والباقي علينا.</p></div>`;
@@ -180,6 +207,12 @@ function syncDims() {
   $('#dmField').classList.toggle('dim', !$('#fDmOn').checked);
 }
 ['#fAll', '#fAny', '#fReplyOn', '#fDmOn'].forEach((s) => ($(s).onchange = syncDims));
+function syncSmart() {
+  const on = $('#fSmart').checked;
+  $('#aiMissing').classList.toggle('hidden', !on || !ST || ST.aiReady);
+  $('#repliesLabel').textContent = on ? 'ردود احتياطية (لو الرد الذكي اتعطل)' : 'الردود';
+}
+$('#fSmart').onchange = syncSmart;
 
 function openSheet(c) {
   F.id = c ? c.id : null;
@@ -198,6 +231,9 @@ function openSheet(c) {
   $('#btnDetails').open = !!(c && c.button_url);
   $('#fLike').checked = c ? c.like_comment : true;
   $('#fOnce').checked = c ? c.one_per_user : true;
+  $('#fFollow').checked = c ? c.follow_button !== false : true;
+  $('#fSmart').checked = c ? c.smart_reply !== false : true;
+  syncSmart();
   $('#fName').value = c ? c.name : '';
   $('#fUrl').value = '';
   syncDims(); renderChosen();
@@ -211,7 +247,7 @@ $('#sheetX').onclick = $('#sheetBg').onclick = closeSheet;
 
 async function loadPagePosts() {
   $('#posts').innerHTML = Array(6).fill('<div class="sk" style="aspect-ratio:1"></div>').join('');
-  try { F.pagePosts = (await api('/posts')).posts; renderPagePosts(); }
+  try { F.pagePosts = (await api('/posts' + pq())).posts; renderPagePosts(); }
   catch (e) { $('#posts').innerHTML = `<div class="note red" style="grid-column:1/-1">${esc(e.message)}</div>`; }
 }
 function renderPagePosts() {
@@ -240,7 +276,7 @@ function renderChosen() {
 $('#chosen').onclick = (e) => { const b = e.target.closest('[data-rm]'); if (b) { F.posts.splice(Number(b.dataset.rm), 1); renderChosen(); } };
 $('#addUrl').onclick = (e) => busy(e.currentTarget, async () => {
   const url = $('#fUrl').value.trim(); if (!url) return;
-  const { post } = await api('/posts/resolve', 'POST', { url });
+  const { post } = await api('/posts/resolve', 'POST', { url, page_id: CUR_PAGE });
   if (F.posts.some((x) => tail(x.id) === tail(post.id))) return toast('المنشور ده مضاف بالفعل');
   F.posts.push(post); $('#fUrl').value = '';
   if (F.pagePosts) renderPagePosts();
@@ -255,6 +291,7 @@ $('#saveReq').onclick = (e) => busy(e.currentTarget, async () => {
     dm_enabled: $('#fDmOn').checked, dm_messages: [$('#fDm').value],
     button_title: $('#fBtnTitle').value, button_url: $('#fBtnUrl').value,
     like_comment: $('#fLike').checked, one_per_user: $('#fOnce').checked,
+    follow_button: $('#fFollow').checked, smart_reply: $('#fSmart').checked, page_id: CUR_PAGE,
   };
   if (F.id) await api('/campaigns/' + F.id, 'PUT', body);
   else await api('/campaigns', 'POST', body);
@@ -269,6 +306,7 @@ async function loadDm() {
   try {
     const d = await api('/dm');
     $('#autoOn').checked = d.auto_enabled; $('#autoText').value = d.auto_text || '';
+    $('#dmFollow').checked = d.follow_button !== false;
     RULES = d.rules.map((r) => ({ keywords: (r.keywords || []).join('، '), reply: r.reply, active: r.active }));
     renderRules();
   } catch { }
@@ -284,7 +322,7 @@ function renderRules() {
 $('#addRule').onclick = () => { RULES = readRules(); RULES.push({ keywords: '', reply: '' }); renderRules(); };
 $('#rules').onclick = (e) => { const b = e.target.closest('[data-rmr]'); if (b) { RULES = readRules(); RULES.splice(Number(b.dataset.rmr), 1); renderRules(); } };
 $('#saveDm').onclick = (e) => busy(e.currentTarget, async () => {
-  await api('/dm', 'PUT', { auto_enabled: $('#autoOn').checked, auto_text: $('#autoText').value, rules: readRules() });
+  await api('/dm', 'PUT', { auto_enabled: $('#autoOn').checked, auto_text: $('#autoText').value, follow_button: $('#dmFollow').checked, rules: readRules() });
   toast('اتحفظ ✓'); loadDm();
 });
 
@@ -303,10 +341,10 @@ $('#pollNow').onclick = (e) => busy(e.currentTarget, async () => { await api('/p
 async function renderSettings() {
   try { await loadStatus(); } catch { return; }
   const p = ST.page;
-  $('#pageCard').innerHTML = p
-    ? `<div class="pageinfo"><img src="${esc(p.picture || '')}" alt=""><div class="sp"><div class="small muted">الصفحة المربوطة</div><h3>${esc(p.name)}</h3>${p.followers ? `<div class="small muted">${num(p.followers)} متابع</div>` : ''}</div></div>
-       <div class="row mt"><button class="btn btn-g btn-sm" id="changePage">${icon('refresh')}تغيير الصفحة</button><button class="btn btn-r btn-sm" id="disc">${icon('x')}فصل</button></div>`
-    : `<h3>مفيش صفحة مربوطة</h3><button class="btn btn-y mt" id="changePage">${icon('fb')}ربط صفحة</button>`;
+  $('#pagesList').innerHTML = ST.pages.length
+    ? ST.pages.map((x) => `<div class="pg"><img src="${esc(x.picture || '')}" alt=""><div class="sp" style="min-width:0"><b style="display:block">${esc(x.name)}</b>${x.followers ? `<span class="small muted">${num(x.followers)} متابع</span>` : ''}</div>
+        <button class="btn btn-r btn-sm" data-disc="${x.id}" data-name="${esc(x.name)}">${icon('x')}فصل</button></div>`).join('')
+    : '<p class="small muted">مفيش صفحات مربوطة — دوس "إضافة صفحة"</p>';
   const checks = [
     [ST.setup.appId && ST.setup.appSecret, 'بيانات تطبيق فيسبوك موجودة'],
     [!!p, 'الصفحة مربوطة'],
@@ -322,9 +360,12 @@ async function renderSettings() {
 document.addEventListener('click', (e) => {
   const c = e.target.closest('[data-copy]');
   if (c) navigator.clipboard.writeText(c.dataset.copy).then(() => toast('اتنسخ ✓'), () => toast(c.dataset.copy));
-  if (e.target.closest('#changePage')) fbLogin(e.target.closest('#changePage'));
-  if (e.target.closest('#disc') && confirm('الطلبات هتقف لحد ما تربط الصفحة تاني. متأكد؟')) api('/fb/disconnect', 'POST').then(() => { toast('اتفصلت'); renderSettings(); });
+  const d = e.target.closest('[data-disc]');
+  if (d && confirm(`فصل صفحة "${d.dataset.name}"؟\nطلباتها هتقف (مش هتتمسح) لحد ما تربطها تاني.`)) {
+    api('/fb/disconnect', 'POST', { id: d.dataset.disc }).then(() => { toast('اتفصلت'); renderSettings(); loadRequests(); }, (err) => toast(err.message, 'err'));
+  }
 });
+$('#addPage').onclick = (e) => fbLogin(e.currentTarget);
 // تسجيل الخروج بس لما إنت تدوس بنفسك (الصفحة نفسها بتفضل مربوطة على السيرفر وشغالة)
 $('#logout').onclick = () => {
   if (!confirm('متأكد إنك عايز تسجل خروج من التطبيق؟\n(الطلبات هتفضل شغالة عادي على السيرفر)')) return;
@@ -363,18 +404,31 @@ $('#tokenBtn').onclick = (e) => busy(e.currentTarget, async () => {
 async function showPicker(pages) {
   if (!pages) pages = (await api('/fb/pages')).pages;
   if (!pages.length) return toast('مفيش صفحات على الحساب ده', 'err');
-  $('#pickList').innerHTML = pages.map((p) => `<div class="pg"><img src="${esc(p.picture || '')}" alt=""><b>${esc(p.name)}</b><button class="btn btn-y btn-sm" data-pick="${p.id}">اختيار</button></div>`).join('');
+  PICK = pages;
+  renderPicker();
   $('#pickSheet').classList.add('on'); $('#pickBg').classList.add('on');
 }
-$('#pickList').onclick = (e) => { const b = e.target.closest('[data-pick]'); if (b) busy(b, () => choosePage(b.dataset.pick)); };
-$('#pickBg').onclick = () => { $('#pickSheet').classList.remove('on'); $('#pickBg').classList.remove('on'); };
+// تقدر تربط أكتر من صفحة من نفس القايمة
+let PICK = [];
+function renderPicker() {
+  const linked = new Set((ST && ST.pages || []).map((p) => p.id));
+  $('#pickList').innerHTML = PICK.map((p) => `<div class="pg"><img src="${esc(p.picture || '')}" alt=""><b>${esc(p.name)}</b>${linked.has(p.id)
+    ? '<span class="ok-tag">✓ مربوطة</span>' : `<button class="btn btn-y btn-sm" data-pick="${p.id}">ربط</button>`}</div>`).join('')
+    + '<button class="btn btn-g btn-full mt" id="pickDone">تم</button>';
+}
+const closePicker = () => { $('#pickSheet').classList.remove('on'); $('#pickBg').classList.remove('on'); loadStatus().then(() => tab('requests')).catch(() => {}); };
+$('#pickList').onclick = (e) => {
+  if (e.target.closest('#pickDone')) return closePicker();
+  const b = e.target.closest('[data-pick]'); if (b) busy(b, () => choosePage(b.dataset.pick));
+};
+$('#pickBg').onclick = closePicker;
 async function choosePage(id) {
   const r = await api('/fb/select', 'POST', { id });
-  $('#pickSheet').classList.remove('on'); $('#pickBg').classList.remove('on');
   toast('الصفحة اتربطت ✓');
   (r.warnings || []).forEach((w) => toast(w, 'err'));
-  F.pagePosts = null;
-  await loadStatus(); tab('requests');
+  CUR_PAGE = id; store.set('page', id); F.pagePosts = null;
+  await loadStatus();
+  if (PICK.length > 1) renderPicker(); else closePicker();
 }
 
 // ---------- البداية ----------

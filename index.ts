@@ -112,18 +112,28 @@ function explain(e: any) {
   if (/only be replied|already been replied/i.test(e?.message || '')) return 'اتبعتله رسالة خاصة قبل كده';
   return e?.message || 'خطأ غير معروف';
 }
-function buildMessage(text: string, btnTitle?: string | null, btnUrl?: string | null) {
-  if (btnTitle && btnUrl) {
-    return { attachment: { type: 'template', payload: { template_type: 'button', text: cut(text, 640), buttons: [{ type: 'web_url', url: btnUrl, title: cut(btnTitle, 20) }] } } };
+type Btn = { title: string; url: string };
+// الأزرار اللي جوه الرسالة: زرار الشرح (لو موجود) + زرار "تابع الصفحة" (اقتراح بس، مش شرط)
+function messageButtons(pageId: string, btnTitle?: string | null, btnUrl?: string | null, follow = true): Btn[] {
+  const out: Btn[] = [];
+  if (btnTitle && btnUrl) out.push({ title: btnTitle, url: btnUrl });
+  if (follow) out.push({ title: '👍 تابع الصفحة', url: `https://www.facebook.com/${pageId}` });
+  return out;
+}
+function buildMessage(text: string, buttons: Btn[] = []) {
+  if (buttons.length) {
+    return { attachment: { type: 'template', payload: { template_type: 'button', text: cut(text, 640), buttons: buttons.slice(0, 3).map((b) => ({ type: 'web_url', url: b.url, title: cut(b.title, 20) })) } } };
   }
   return { text: cut(text, 2000) };
 }
-async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, bt?: string | null, bu?: string | null) {
+// لو الأزرار اترفضت لأي سبب نبعت نص عادي فيه الروابط
+const plainWithLinks = (text: string, buttons: Btn[]) => ({ text: cut([text, ...buttons.map((b) => `${b.title}: ${b.url}`)].join('\n'), 2000) });
+async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, buttons: Btn[] = []) {
   try {
-    return await fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: buildMessage(text, bt, bu) }, token);
+    return await fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: buildMessage(text, buttons) }, token);
   } catch (e) {
-    if (!bt || !bu) throw e;
-    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: { text: cut(text + '\n' + bu, 2000) } }, token);
+    if (!buttons.length) throw e;
+    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: plainWithLinks(text, buttons) }, token);
   }
 }
 async function recentPosts(pageId: string, token: string, limit = 24) {
@@ -172,6 +182,17 @@ async function setSettings(patch: Record<string, unknown>) {
   const { error } = await db.from('settings').update(patch).eq('id', 1);
   if (error) throw new Error(error.message);
 }
+// الصفحات المربوطة (تقدر تربط أكتر من صفحة)
+async function getPages(): Promise<any[]> {
+  const { data } = await db.from('pages').select('*').order('connected_at');
+  return data || [];
+}
+// لكل صفحة بنعمل "سياق" فيه بياناتها + الإعدادات العامة
+const ctxFor = (s: any, p: any) => ({ ...s, page_id: p.id, page_name: p.name, page_token: p.token });
+// الطلبات القديمة اللي مالهاش صفحة بتتبع أول صفحة اتربطت
+const campaignsFor = (all: any[], pageId: string, firstId: string) => all.filter((c) => (c.page_id || firstId) === pageId);
+const safePageRow = (p: any) => ({ id: p.id, name: p.name, picture: p.picture, followers: p.followers });
+
 function log(type: string, text: string) {
   return db.from('logs').insert({ type, text: cut(text, 500) }).then(() => {}, () => {});
 }
@@ -197,6 +218,48 @@ function findCampaign(campaigns: any[], postId: string, message: string) {
     if (matchKeyword(message, c.keywords)) return c;
   }
   return null;
+}
+
+// =====================================================================
+//  الرد الذكي (Google Gemini — فيه حصة مجانية): رد مناسب لكلام كل شخص
+// =====================================================================
+const FALLBACK_REPLY = 'شكرًا يا {first_name} ❤️ بعتلك التفاصيل على الخاص 📩';
+async function smartReply(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
+  const key = env('GEMINI_API_KEY');
+  if (!key || !comment.trim()) return '';
+  const first = (name || '').trim().split(/\s+/)[0] || '';
+  const system = [
+    `إنت أدمن صفحة فيسبوك اسمها "${pageName}" وبترد على تعليقات المتابعين بنفسك.`,
+    'اكتب رد واحد بس باللهجة المصرية، جملة أو جملتين قصيرين (أقل من 25 كلمة).',
+    'الرد لازم يكون مناسب ومرتبط بكلام الشخص نفسه، دافي وطبيعي زي إنسان مش بوت، ومختلف كل مرة.',
+    first ? `ممكن تنادي الشخص باسمه "${first}" (مش لازم كل مرة).` : '',
+    dmSent ? 'لازم الرد يخلص بإنك بعتله الشرح/التفاصيل على الخاص (الماسنجر).' : '',
+    'ممنوع: روابط، هاشتاجات، أكتر من إيموجي أو اتنين، وعود بحاجات مش مذكورة، أو إنك تقول إنك ذكاء اصطناعي.',
+    'لو التعليق فيه إساءة أو كلام مش لطيف رد بأدب وهدوء من غير جدال.',
+    'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
+  ].filter(Boolean).join('\n');
+  const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nتعليق ${first || 'متابع'}: ${cut(comment, 400)}`;
+  try {
+    const model = env('GEMINI_MODEL') || 'gemini-2.5-flash';
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: { temperature: 1, maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 0 } },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { await log('error', `⚠️ الرد الذكي: ${data?.error?.message || res.status} — اتبعت رد عادي بداله`); return ''; }
+    let text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('').trim();
+    text = text.replace(/^["'«“]+|["'»”]+$/g, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').trim();
+    return text.length >= 3 ? cut(text, 300) : '';
+  } catch (e) {
+    await log('error', `⚠️ الرد الذكي: ${(e as Error).message} — اتبعت رد عادي بداله`);
+    return '';
+  }
 }
 
 // مواعيد بشرية محسوبة من وقت كتابة التعليق (عشان فيسبوك ميعتبرهاش سبام)
@@ -232,13 +295,20 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   const vars = { name: cm.fromName, page: s.page_name };
   const fail = async (what: string, e: unknown) => { await bump(c.id, 'errors'); await log('error', `❌ ${what} (${who}): ${explain(e)}`); };
 
+  // الرد الذكي بيتكتب في الخلفية وإحنا مستنيين ميعاد الرد (عشان ميأخرش حاجة)
+  const dmWillSend = !!(c.dm_enabled && (c.dm_messages || []).length);
+  const topic = [c.name, ...(c.posts || []).map((p: any) => p.text)].filter(Boolean).join(' — ');
+  const smart = c.reply_enabled && c.smart_reply !== false
+    ? smartReply(cm.message, cm.fromName || '', s.page_name || '', topic, dmWillSend)
+    : Promise.resolve('');
+
   if (c.like_comment) {
     await waitUntil(likeAt);
     try { await fb('POST', `/${cm.commentId}/likes`, {}, s.page_token); await bump(c.id, 'liked'); }
     catch (e) { await fail('اللايك', e); }
   }
   if (c.reply_enabled) {
-    const text = fill(pick(c.replies), vars);
+    const text = (await smart) || fill(pick(c.replies) || FALLBACK_REPLY, vars);
     if (text) {
       await waitUntil(replyAt);
       try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${cut(text, 70)}"`); }
@@ -250,7 +320,7 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
     if (text) {
       await waitUntil(Math.max(replyAt, Date.now()) + rand(TIMING.dm));
       try {
-        const r = await sendPrivateReply(s.page_id, cm.commentId, text, s.page_token, c.button_title, c.button_url);
+        const r = await sendPrivateReply(s.page_id, cm.commentId, text, s.page_token, messageButtons(s.page_id, c.button_title, c.button_url, c.follow_button !== false));
         await bump(c.id, 'messaged');
         if (r?.recipient_id) await db.from('dm_sent').upsert({ psid: r.recipient_id, at: new Date().toISOString() });
         await log('dm', `📩 رسالة ماسنجر اتبعتت لـ ${who}`);
@@ -262,7 +332,9 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
 async function handleMessage(psid: string, text: string, s: any) {
   if (!s.page_id || !s.page_token || psid === s.page_id) return;
   const nameOf = async () => { try { const r = await fb('GET', `/${psid}`, { fields: 'name,first_name' }, s.page_token); return r.name || r.first_name || ''; } catch { return ''; } };
-  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: cut(msg, 2000) } }, s.page_token);
+  const buttons = messageButtons(s.page_id, null, null, s.dm_follow_button !== false);
+  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: buildMessage(msg, buttons) }, s.page_token)
+    .catch(() => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: plainWithLinks(msg, buttons) }, s.page_token));
 
   const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
   for (const r of rules || []) {
@@ -287,22 +359,26 @@ async function activeCampaigns() {
 
 // الفحص الدوري (Supabase بيشغله كل 30 ثانية)
 async function poll(force = false) {
-  const s = await getSettings();
-  if (!s.page_id || !s.page_token) return { skipped: 'no page' };
-  if (!force && s.last_poll && Date.now() - new Date(s.last_poll).getTime() < 20_000) return { skipped: 'too soon' };
+  const settings = await getSettings();
+  const pages = await getPages();
+  if (!pages.length) return { skipped: 'no page' };
+  if (!force && settings.last_poll && Date.now() - new Date(settings.last_poll).getTime() < 20_000) return { skipped: 'too soon' };
   await setSettings({ last_poll: new Date().toISOString() });
-  const campaigns = await activeCampaigns();
-  if (!campaigns.length) return { skipped: 'no campaigns' };
+  const all = await activeCampaigns();
+  if (!all.length) return { skipped: 'no campaigns' };
 
+  const started = Date.now();
+  let handled = 0;
+  const jobs: Promise<unknown>[] = []; // التعليقات بتشتغل مع بعض (كل واحد بمواعيده) بدل ما تستنى بعض
+  for (const page of pages) {
+  const s = ctxFor(settings, page);
+  const campaigns = campaignsFor(all, page.id, pages[0].id);
+  if (!campaigns.length) continue;
   const targets = new Set<string>();
   for (const c of campaigns) for (const p of c.posts || []) targets.add(p.id);
   if (campaigns.some((c) => c.all_posts)) {
     try { for (const p of await recentPosts(s.page_id, s.page_token, 5)) targets.add(p.id); } catch { /* */ }
   }
-
-  const started = Date.now();
-  let handled = 0;
-  const jobs: Promise<unknown>[] = []; // التعليقات بتشتغل مع بعض (كل واحد بمواعيده) بدل ما تستنى بعض
   for (const objectId of targets) {
     if (Date.now() - started > 40_000) break;
     let comments: any[] = [];
@@ -311,7 +387,7 @@ async function poll(force = false) {
         .catch(() => fb('GET', `/${tail(objectId)}/comments`, { fields: 'id,message,from{id,name},created_time', filter: 'stream', order: 'reverse_chronological', limit: 40 }, s.page_token));
       comments = r.data || [];
     } catch (e) {
-      if ((e as FbError).code === 190) { await log('error', '⚠️ ' + explain(e)); return { error: 'token' }; }
+      if ((e as FbError).code === 190) { await log('error', `⚠️ ${page.name}: ${explain(e)}`); break; }
       continue;
     }
     if (!comments.length) continue;
@@ -324,8 +400,9 @@ async function poll(force = false) {
       await sleep(300);
     }
   }
+  }
   await Promise.allSettled(jobs);
-  return { ok: true, targets: targets.size, handled };
+  return { ok: true, pages: pages.length, handled };
 }
 
 // =====================================================================
@@ -343,15 +420,22 @@ async function validSignature(req: Request, raw: string) {
 
 async function processWebhook(body: any) {
   if (body.object !== 'page') return;
-  const s = await getSettings();
+  const settings = await getSettings();
   await setSettings({ last_webhook: new Date().toISOString() });
-  let campaigns: any[] | null = null;
+  const pages = await getPages();
+  if (!pages.length) return;
+  let all: any[] | null = null;
   const jobs: Promise<unknown>[] = [];
   for (const entry of body.entry || []) {
+    // كل حدث جاي من صفحة معينة — بنشتغل بتوكن الصفحة دي وطلباتها بس
+    const page = pages.find((p) => p.id === String(entry.id));
+    if (!page) continue;
+    const s = ctxFor(settings, page);
     for (const ch of entry.changes || []) {
       const v = ch.value || {};
       if (ch.field === 'feed' && v.item === 'comment' && v.verb === 'add') {
-        campaigns ??= await activeCampaigns();
+        all ??= await activeCampaigns();
+        const campaigns = campaignsFor(all, page.id, pages[0].id);
         jobs.push(handleComment({ commentId: v.comment_id, postId: v.post_id, message: v.message || '', fromId: v.from?.id, fromName: v.from?.name, created: v.created_time ? v.created_time * 1000 : Date.now() }, s, campaigns));
       }
     }
@@ -367,9 +451,6 @@ async function processWebhook(body: any) {
 // =====================================================================
 //  لوحة التحكم
 // =====================================================================
-function safePage(s: any) {
-  return s.page_id ? { id: s.page_id, name: s.page_name, picture: s.page_picture, followers: s.page_followers } : null;
-}
 function cleanCampaign(b: any) {
   const lines = (x: unknown) => (Array.isArray(x) ? x : String(x || '').split('\n')).map((v) => cut(String(v).trim(), 1000)).filter(Boolean);
   const kws = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[,،\n]/)).map((k: string) => String(k).trim()).filter(Boolean);
@@ -387,12 +468,14 @@ function cleanCampaign(b: any) {
     button_url: String(b.button_url || '').trim() || null,
     like_comment: b.like_comment !== false,
     one_per_user: b.one_per_user !== false,
+    follow_button: b.follow_button !== false,
+    smart_reply: b.smart_reply !== false,
   };
   let err = '';
   if (!c.all_posts && !c.posts.length) err = 'اختار فيديو أو منشور واحد على الأقل';
   else if (!c.match_all && !c.keywords.length) err = 'اكتب الكلمة المفتاحية (زي: مهتم)';
   else if (!c.reply_enabled && !c.dm_enabled && !c.like_comment) err = 'شغّل الرد على التعليق أو رسالة الماسنجر';
-  else if (c.reply_enabled && !c.replies.length) err = 'اكتب الرد على التعليق';
+  else if (c.reply_enabled && !c.replies.length && !c.smart_reply) err = 'اكتب الرد على التعليق (أو شغّل الرد الذكي)';
   else if (c.dm_enabled && !c.dm_messages.length) err = 'اكتب رسالة الماسنجر';
   else if (c.button_url && !/^https?:\/\//.test(c.button_url)) err = 'رابط الزرار لازم يبدأ بـ https://';
   return { c, err };
@@ -401,11 +484,13 @@ function cleanCampaign(b: any) {
 async function selectPage(p: any) {
   let info: any = {};
   try { info = await fb('GET', `/${p.id}`, { fields: 'name,picture{url},followers_count,fan_count' }, p.token); } catch { /* */ }
-  await setSettings({
-    page_id: p.id, page_name: info.name || p.name, page_token: p.token,
-    page_picture: info.picture?.data?.url || p.picture || null,
-    page_followers: info.followers_count || info.fan_count || null, pending_pages: [],
+  // بتتضاف لقايمة الصفحات (ولو موجودة بيتحدث التوكن بتاعها)
+  const { error } = await db.from('pages').upsert({
+    id: p.id, name: info.name || p.name, token: p.token,
+    picture: info.picture?.data?.url || p.picture || null,
+    followers: info.followers_count || info.fan_count || null,
   });
+  if (error) throw new Error('قاعدة البيانات محتاجة تحديث (جدول الصفحات): ' + error.message);
   const warnings: string[] = [];
   // تفعيل الويب هوك تلقائيًا في تطبيق فيسبوك + اشتراك الصفحة
   if (env('FB_APP_ID') && env('FB_APP_SECRET')) {
@@ -455,6 +540,11 @@ async function api(req: Request, path: string): Promise<Response> {
   const method = req.method;
   const body = method === 'GET' || method === 'DELETE' ? {} : await req.json().catch(() => ({}));
   const s = await getSettings();
+  const pages = await getPages();
+  // الصفحة اللي اللوحة شغالة عليها دلوقتي (?page= أو page_id في الطلب) — وإلا أول صفحة
+  const wanted = String(new URL(req.url).searchParams.get('page') || body.page_id || '');
+  const cur = pages.find((p) => p.id === wanted) || pages[0];
+  const ps = cur ? ctxFor(s, cur) : s;
   let m: RegExpMatchArray | null;
 
   // ---- الحالة ----
@@ -467,7 +557,10 @@ async function api(req: Request, path: string): Promise<Response> {
     const { data: camps } = await db.from('campaigns').select('active,matched,replied,messaged,liked,errors');
     const sum = (k: string) => (camps || []).reduce((a: number, c: any) => a + (c[k] || 0), 0);
     return json({
-      page: safePage(s),
+      page: cur ? safePageRow(cur) : null,
+      pages: pages.map(safePageRow),
+      dmFollowButton: s.dm_follow_button !== false,
+      aiReady: !!env('GEMINI_API_KEY'),
       totals: { comments: sum('matched'), replies: sum('replied'), messages: sum('messaged'), likes: sum('liked'), errors: sum('errors'), active: (camps || []).filter((c: any) => c.active).length },
       lastPoll: s.last_poll, lastWebhook: s.last_webhook, cronReady: s.cron_url === FN_URL + '/cron',
       setup: {
@@ -513,30 +606,33 @@ async function api(req: Request, path: string): Promise<Response> {
     return json({ ok: true, warnings });
   }
   if (path === '/fb/disconnect' && method === 'POST') {
-    if (s.page_id) { try { await fb('DELETE', `/${s.page_id}/subscribed_apps`, {}, s.page_token); } catch { /* */ } }
-    await setSettings({ page_id: null, page_name: null, page_token: null, page_picture: null, page_followers: null });
-    await log('system', '🔌 تم فصل الصفحة');
+    const p = pages.find((x) => x.id === String(body.id || ''));
+    if (!p) return json({ error: 'الصفحة مش موجودة' }, 404);
+    try { await fb('DELETE', `/${p.id}/subscribed_apps`, {}, p.token); } catch { /* */ }
+    await db.from('pages').delete().eq('id', p.id);
+    await db.from('campaigns').update({ active: false }).eq('page_id', p.id); // طلباتها بتقف بس مش بتتمسح
+    await log('system', `🔌 تم فصل صفحة "${p.name}"`);
     return json({ ok: true });
   }
 
   // ---- المنشورات ----
   if (path === '/posts' && method === 'GET') {
-    if (!s.page_token) return json({ error: 'اربط الصفحة الأول' }, 400);
-    return json({ posts: await recentPosts(s.page_id, s.page_token) });
+    if (!cur) return json({ error: 'اربط الصفحة الأول' }, 400);
+    return json({ posts: await recentPosts(ps.page_id, ps.page_token) });
   }
   if (path === '/posts/resolve' && method === 'POST') {
-    if (!s.page_token) return json({ error: 'اربط الصفحة الأول' }, 400);
+    if (!cur) return json({ error: 'اربط الصفحة الأول' }, 400);
     const parsed = parseLink(body.url);
     if (parsed.error) return json({ error: parsed.error }, 400);
     const id = parsed.id!;
-    for (const t of id.includes('_') ? [id] : [`${s.page_id}_${id}`, id]) {
+    for (const t of id.includes('_') ? [id] : [`${ps.page_id}_${id}`, id]) {
       try {
-        const o = await fb('GET', `/${t}`, { fields: 'id,message,full_picture,permalink_url' }, s.page_token)
-          .catch(() => fb('GET', `/${t}`, { fields: 'id,description,title,picture,permalink_url' }, s.page_token));
-        return json({ post: { id: o.id.includes('_') ? o.id : `${s.page_id}_${o.id}`, alt: [t, id], text: o.message || o.title || o.description || '', image: o.full_picture || o.picture || '', link: body.url } });
+        const o = await fb('GET', `/${t}`, { fields: 'id,message,full_picture,permalink_url' }, ps.page_token)
+          .catch(() => fb('GET', `/${t}`, { fields: 'id,description,title,picture,permalink_url' }, ps.page_token));
+        return json({ post: { id: o.id.includes('_') ? o.id : `${ps.page_id}_${o.id}`, alt: [t, id], text: cut(o.message || o.title || o.description || '', 160), image: o.full_picture || o.picture || '', link: body.url } });
       } catch { /* جرب اللي بعده */ }
     }
-    return json({ post: { id: `${s.page_id}_${id}`, alt: [id], text: '', image: '', link: body.url } });
+    return json({ post: { id: `${ps.page_id}_${id}`, alt: [id], text: '', image: '', link: body.url } });
   }
 
   // ---- الطلبات ----
@@ -547,7 +643,8 @@ async function api(req: Request, path: string): Promise<Response> {
   if (path === '/campaigns' && method === 'POST') {
     const { c, err } = cleanCampaign(body);
     if (err) return json({ error: err }, 400);
-    const { data, error } = await db.from('campaigns').insert({ ...c, active: true, since: new Date().toISOString() }).select().single();
+    if (!cur) return json({ error: 'اربط صفحة الأول من الإعدادات' }, 400);
+    const { data, error } = await db.from('campaigns').insert({ ...c, page_id: cur.id, active: true, since: new Date().toISOString() }).select().single();
     if (error) return json({ error: error.message }, 500);
     await log('system', `🚀 تم تشغيل طلب "${c.name}"`);
     return json({ campaign: data });
@@ -578,10 +675,10 @@ async function api(req: Request, path: string): Promise<Response> {
   // ---- الماسنجر ----
   if (path === '/dm' && method === 'GET') {
     const { data } = await db.from('dm_rules').select('*').order('created_at');
-    return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, rules: data || [] });
+    return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, follow_button: s.dm_follow_button !== false, rules: data || [] });
   }
   if (path === '/dm' && method === 'PUT') {
-    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: cut(body.auto_text, 2000) });
+    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: cut(body.auto_text, 2000), dm_follow_button: body.follow_button !== false });
     const rules = (body.rules || []).map((r: any) => ({
       active: r.active !== false,
       keywords: (Array.isArray(r.keywords) ? r.keywords : String(r.keywords || '').split(/[,،]/)).map((k: string) => k.trim()).filter(Boolean),

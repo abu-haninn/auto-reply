@@ -280,12 +280,25 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   if (!c) return;
   if (cm.created && cm.created < new Date(c.since).getTime() - 60_000) return; // تعليق قديم قبل تشغيل الطلب
 
-  const who = cm.fromName || 'متابع';
-  if (c.one_per_user && cm.fromId) {
-    const { count } = await db.from('processed').select('comment_id', { count: 'exact', head: true }).eq('campaign_id', c.id).eq('user_id', cm.fromId);
-    if (count) { if (await claim(cm.commentId, c.id, cm.fromId)) log('skip', `${who} علّق تاني — اتجاهل عشان أخد رد قبل كده`); return; }
+  // لو فيسبوك مبعتش صاحب التعليق نجيبه (عشان نقدر نمنع تكرار الرد لنفس الشخص)
+  if (!cm.fromId) {
+    try { const r = await fb('GET', `/${cm.commentId}`, { fields: 'from{id,name}' }, s.page_token); cm.fromId = r.from?.id; cm.fromName ||= r.from?.name; } catch { /* */ }
+  }  const who = cm.fromName || 'متابع';
+  if (!(await claim(cm.commentId, c.id, cm.fromId))) return; // التعليق ده اتعالج بالفعل
+  if (cm.fromId && cm.fromId === s.page_id) return;
+  // رد واحد بس لكل شخص: "حجز" الشخص في قاعدة البيانات نفسها — لو كتب 15 تعليق في نفس اللحظة واحد بس اللي بيعدي
+  if (c.one_per_user) {
+    if (cm.fromId) {
+      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: cm.fromId });
+      if (error) { await log('skip', `${who} علّق تاني — اتجاهل عشان أخد رد قبل كده`); return; }
+    } else {
+      // فيسبوك مخبي صاحب التعليق (التطبيق لسه في وضع التجربة): حماية من السبام —
+      // رد واحد بس كل 45 ثانية لكل طلب على التعليقات المجهولة
+      const slot = `anon-${Math.floor(Date.now() / 45_000)}`;
+      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: slot });
+      if (error) { await log('skip', 'تعليق مجهول الصاحب اتجاهل (حماية من التكرار — رد واحد كل 45 ثانية)'); return; }
+    }
   }
-  if (!(await claim(cm.commentId, c.id, cm.fromId))) return; // اتعالج بالفعل
 
   await bump(c.id, 'matched');
   await log('comment', `💬 ${who}: "${cut(cm.message, 80)}" ← ${c.name}`);

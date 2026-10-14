@@ -244,25 +244,35 @@ async function generateSmart(comment: string, name: string, pageName: string, to
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
   const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nتعليق ${first || 'متابع'}: ${cut(comment, 400)}`;
-  {
-    const model = env('GEMINI_MODEL') || 'gemini-2.5-flash';
+  // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
+  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean))] as string[];
+  let lastErr = '';
+  for (const model of models) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature: 1, maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 0 } },
+        generationConfig: { temperature: 1, maxOutputTokens: 1024 },
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(20_000),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
-    let text = (data.candidates?.[0]?.content?.parts || []).map((p: any) => p.text || '').join('').trim();
+    if (!res.ok) {
+      lastErr = data?.error?.message || `HTTP ${res.status}`;
+      // الموديل مش موجود/اتوقف ← جرب اللي بعده؛ أي خطأ تاني (المفتاح، الحصة) ← نوقف
+      if (res.status === 404 || /no longer available|not found|not supported|deprecated/i.test(lastErr)) continue;
+      throw new Error(lastErr);
+    }
+    geminiModelOk = model;
+    let text = (data.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('').trim();
     text = text.replace(/^["'«“]+|["'»”]+$/g, '').replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').trim();
     return text.length >= 3 ? cut(text, 300) : '';
   }
+  throw new Error(lastErr || 'مفيش موديل Gemini متاح');
 }
+let geminiModelOk = '';
 
 // مواعيد بشرية محسوبة من وقت كتابة التعليق (عشان فيسبوك ميعتبرهاش سبام)
 const TIMING = {

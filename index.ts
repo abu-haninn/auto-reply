@@ -277,15 +277,17 @@ async function generateSmart(comment: string, name: string, pageName: string, to
 let geminiModelOk = '';
 
 // مواعيد بشرية محسوبة من وقت كتابة التعليق (عشان فيسبوك ميعتبرهاش سبام)
+// مواعيد شبه الإنسان: مش فوري (بيبان بوت) ومش متأخر قوي (الشخص بيمشي).
+// كله بيخلص في أقل من دقيقتين عشان حدود السيرفر المجاني (150 ثانية).
 const TIMING = {
-  like:  [10_000, 20_000], // اللايك بعد 10-20 ثانية
-  reply: [28_000, 35_000], // الرد على التعليق بعد حوالي 30 ثانية
-  dm:    [4_000, 9_000],   // رسالة الماسنجر بعد الرد بـ 4-9 ثواني
+  like:  [15_000, 35_000], // اللايك بعد 15-35 ثانية
+  reply: [45_000, 75_000], // الرد على التعليق بعد 45-75 ثانية (حوالي دقيقة)
+  dm:    [10_000, 25_000], // رسالة الماسنجر بعد الرد بـ 10-25 ثانية
 };
 const rand = ([a, b]: number[]) => a + Math.random() * (b - a);
 // "طلب" وهمي بنستخدمه عشان نقفل رسالة الماسنجر لكل شخص على مستوى الصفحة كلها
 const DM_LOCK = '00000000-0000-0000-0000-000000000000';
-const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 60_000)));
+const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 90_000)));
 
 async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   if (!s.page_id || !s.page_token || !cm.commentId) return;

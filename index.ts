@@ -26,6 +26,9 @@ const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8' } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tail = (id: string) => String(id || '').split('_').pop() as string;
+// قص النص من غير ما يقطع إيموجي من النص (الإيموجي المقطوع بيبوظ قاعدة البيانات)
+const cut = (s: unknown, n: number) =>
+  Array.from(String(s ?? '').replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')).slice(0, n).join('');
 const background = (p: Promise<unknown>) => {
   const safe = p.catch((e) => console.error(e));
   try { EdgeRuntime.waitUntil(safe); } catch { /* محلي */ }
@@ -111,16 +114,16 @@ function explain(e: any) {
 }
 function buildMessage(text: string, btnTitle?: string | null, btnUrl?: string | null) {
   if (btnTitle && btnUrl) {
-    return { attachment: { type: 'template', payload: { template_type: 'button', text: text.slice(0, 640), buttons: [{ type: 'web_url', url: btnUrl, title: btnTitle.slice(0, 20) }] } } };
+    return { attachment: { type: 'template', payload: { template_type: 'button', text: cut(text, 640), buttons: [{ type: 'web_url', url: btnUrl, title: cut(btnTitle, 20) }] } } };
   }
-  return { text: text.slice(0, 2000) };
+  return { text: cut(text, 2000) };
 }
 async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, bt?: string | null, bu?: string | null) {
   try {
     return await fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: buildMessage(text, bt, bu) }, token);
   } catch (e) {
     if (!bt || !bu) throw e;
-    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: { text: (text + '\n' + bu).slice(0, 2000) } }, token);
+    return fb('POST', `/${pageId}/messages`, { recipient: { comment_id: commentId }, message: { text: cut(text + '\n' + bu, 2000) } }, token);
   }
 }
 async function recentPosts(pageId: string, token: string, limit = 24) {
@@ -170,7 +173,7 @@ async function setSettings(patch: Record<string, unknown>) {
   if (error) throw new Error(error.message);
 }
 function log(type: string, text: string) {
-  return db.from('logs').insert({ type, text: text.slice(0, 500) }).then(() => {}, () => {});
+  return db.from('logs').insert({ type, text: cut(text, 500) }).then(() => {}, () => {});
 }
 const bump = (cid: string, col: string) => db.rpc('bump', { cid, col, n: 1 }).then(() => {}, () => {});
 // "حجز" التعليق: لو اتعالج قبل كده بيرجع false (ده اللي بيمنع الرد مرتين)
@@ -211,7 +214,7 @@ async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0)
   if (!(await claim(cm.commentId, c.id, cm.fromId))) return; // اتعالج بالفعل
 
   await bump(c.id, 'matched');
-  await log('comment', `💬 ${who}: "${cm.message.slice(0, 80)}" ← ${c.name}`);
+  await log('comment', `💬 ${who}: "${cut(cm.message, 80)}" ← ${c.name}`);
   if (delayMs) await sleep(delayMs);
 
   const vars = { name: cm.fromName, page: s.page_name };
@@ -225,7 +228,7 @@ async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0)
   if (c.reply_enabled) {
     const text = fill(pick(c.replies), vars);
     if (text) {
-      try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${text.slice(0, 70)}"`); }
+      try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${cut(text, 70)}"`); }
       catch (e) { await fail('الرد على التعليق', e); }
       await sleep(800);
     }
@@ -246,7 +249,7 @@ async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0)
 async function handleMessage(psid: string, text: string, s: any) {
   if (!s.page_id || !s.page_token || psid === s.page_id) return;
   const nameOf = async () => { try { const r = await fb('GET', `/${psid}`, { fields: 'name,first_name' }, s.page_token); return r.name || r.first_name || ''; } catch { return ''; } };
-  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: msg.slice(0, 2000) } }, s.page_token);
+  const send = (msg: string) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: cut(msg, 2000) } }, s.page_token);
 
   const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
   for (const r of rules || []) {
@@ -354,19 +357,19 @@ function safePage(s: any) {
   return s.page_id ? { id: s.page_id, name: s.page_name, picture: s.page_picture, followers: s.page_followers } : null;
 }
 function cleanCampaign(b: any) {
-  const lines = (x: unknown) => (Array.isArray(x) ? x : String(x || '').split('\n')).map((v) => String(v).trim()).filter(Boolean);
+  const lines = (x: unknown) => (Array.isArray(x) ? x : String(x || '').split('\n')).map((v) => cut(String(v).trim(), 1000)).filter(Boolean);
   const kws = (Array.isArray(b.keywords) ? b.keywords : String(b.keywords || '').split(/[,،\n]/)).map((k: string) => String(k).trim()).filter(Boolean);
   const c = {
-    name: String(b.name || '').trim().slice(0, 80) || (kws[0] ? `طلب "${kws[0]}"` : 'طلب جديد'),
+    name: cut(String(b.name || '').trim(), 80) || (kws[0] ? `طلب "${kws[0]}"` : 'طلب جديد'),
     all_posts: !!b.all_posts,
-    posts: b.all_posts ? [] : (b.posts || []).slice(0, 50).map((p: any) => ({ id: String(p.id), alt: (p.alt || []).map(String), text: String(p.text || '').slice(0, 160), image: String(p.image || ''), link: String(p.link || '') })),
+    posts: b.all_posts ? [] : (b.posts || []).slice(0, 50).map((p: any) => ({ id: String(p.id), alt: (p.alt || []).map(String), text: cut(p.text, 160), image: String(p.image || ''), link: String(p.link || '') })),
     keywords: kws,
     match_all: !!b.match_all,
     reply_enabled: b.reply_enabled !== false,
     replies: lines(b.replies),
     dm_enabled: b.dm_enabled !== false,
-    dm_messages: Array.isArray(b.dm_messages) ? b.dm_messages.map((x: string) => String(x).trim()).filter(Boolean) : [String(b.dm_messages || '').trim()].filter(Boolean),
-    button_title: String(b.button_title || '').trim().slice(0, 20) || null,
+    dm_messages: (Array.isArray(b.dm_messages) ? b.dm_messages : [b.dm_messages]).map((x: string) => cut(String(x || '').trim(), 2000)).filter(Boolean),
+    button_title: cut(String(b.button_title || '').trim(), 20) || null,
     button_url: String(b.button_url || '').trim() || null,
     like_comment: b.like_comment !== false,
     one_per_user: b.one_per_user !== false,
@@ -564,11 +567,11 @@ async function api(req: Request, path: string): Promise<Response> {
     return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, rules: data || [] });
   }
   if (path === '/dm' && method === 'PUT') {
-    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: String(body.auto_text || '').slice(0, 2000) });
+    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: cut(body.auto_text, 2000) });
     const rules = (body.rules || []).map((r: any) => ({
       active: r.active !== false,
       keywords: (Array.isArray(r.keywords) ? r.keywords : String(r.keywords || '').split(/[,،]/)).map((k: string) => k.trim()).filter(Boolean),
-      reply: String(r.reply || '').trim().slice(0, 2000),
+      reply: cut(String(r.reply || '').trim(), 2000),
     })).filter((r: any) => r.keywords.length && r.reply);
     await db.from('dm_rules').delete().gte('created_at', '1970-01-01');
     if (rules.length) await db.from('dm_rules').insert(rules);

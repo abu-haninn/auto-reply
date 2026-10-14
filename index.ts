@@ -199,7 +199,16 @@ function findCampaign(campaigns: any[], postId: string, message: string) {
   return null;
 }
 
-async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0) {
+// مواعيد بشرية محسوبة من وقت كتابة التعليق (عشان فيسبوك ميعتبرهاش سبام)
+const TIMING = {
+  like:  [10_000, 20_000], // اللايك بعد 10-20 ثانية
+  reply: [28_000, 35_000], // الرد على التعليق بعد حوالي 30 ثانية
+  dm:    [4_000, 9_000],   // رسالة الماسنجر بعد الرد بـ 4-9 ثواني
+};
+const rand = ([a, b]: number[]) => a + Math.random() * (b - a);
+const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 60_000)));
+
+async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   if (!s.page_id || !s.page_token || !cm.commentId) return;
   if (cm.fromId && cm.fromId === s.page_id) return; // تعليقات الصفحة نفسها
   const c = findCampaign(campaigns, cm.postId, cm.message);
@@ -215,27 +224,31 @@ async function handleComment(cm: Comment, s: any, campaigns: any[], delayMs = 0)
 
   await bump(c.id, 'matched');
   await log('comment', `💬 ${who}: "${cut(cm.message, 80)}" ← ${c.name}`);
-  if (delayMs) await sleep(delayMs);
+  // كل المواعيد محسوبة من لحظة كتابة التعليق؛ لو التعليق اتلقط متأخر بنكمل بفواصل صغيرة
+  const base = Math.min(cm.created || Date.now(), Date.now());
+  const likeAt = base + rand(TIMING.like);
+  const replyAt = Math.max(base + rand(TIMING.reply), likeAt + 3_000);
 
   const vars = { name: cm.fromName, page: s.page_name };
   const fail = async (what: string, e: unknown) => { await bump(c.id, 'errors'); await log('error', `❌ ${what} (${who}): ${explain(e)}`); };
 
   if (c.like_comment) {
+    await waitUntil(likeAt);
     try { await fb('POST', `/${cm.commentId}/likes`, {}, s.page_token); await bump(c.id, 'liked'); }
     catch (e) { await fail('اللايك', e); }
-    await sleep(800);
   }
   if (c.reply_enabled) {
     const text = fill(pick(c.replies), vars);
     if (text) {
+      await waitUntil(replyAt);
       try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${cut(text, 70)}"`); }
       catch (e) { await fail('الرد على التعليق', e); }
-      await sleep(800);
     }
   }
   if (c.dm_enabled) {
     const text = fill(pick(c.dm_messages), vars);
     if (text) {
+      await waitUntil(Math.max(replyAt, Date.now()) + rand(TIMING.dm));
       try {
         const r = await sendPrivateReply(s.page_id, cm.commentId, text, s.page_token, c.button_title, c.button_url);
         await bump(c.id, 'messaged');
@@ -289,8 +302,9 @@ async function poll(force = false) {
 
   const started = Date.now();
   let handled = 0;
+  const jobs: Promise<unknown>[] = []; // التعليقات بتشتغل مع بعض (كل واحد بمواعيده) بدل ما تستنى بعض
   for (const objectId of targets) {
-    if (Date.now() - started > 90_000) break;
+    if (Date.now() - started > 40_000) break;
     let comments: any[] = [];
     try {
       const r = await fb('GET', `/${objectId}/comments`, { fields: 'id,message,from{id,name},created_time', filter: 'stream', order: 'reverse_chronological', limit: 40 }, s.page_token)
@@ -304,12 +318,13 @@ async function poll(force = false) {
     const { data: done } = await db.from('processed').select('comment_id').in('comment_id', comments.map((c) => c.id));
     const doneSet = new Set((done || []).map((d) => d.comment_id));
     for (const c of comments.reverse()) {
-      if (doneSet.has(c.id)) continue;
-      if (Date.now() - started > 100_000) break;
-      await handleComment({ commentId: c.id, postId: objectId, message: c.message || '', fromId: c.from?.id, fromName: c.from?.name, created: new Date(c.created_time).getTime() }, s, campaigns);
+      if (doneSet.has(c.id) || handled >= 25) continue;
+      jobs.push(handleComment({ commentId: c.id, postId: objectId, message: c.message || '', fromId: c.from?.id, fromName: c.from?.name, created: new Date(c.created_time).getTime() }, s, campaigns).catch((e) => console.error(e)));
       handled++;
+      await sleep(300);
     }
   }
+  await Promise.allSettled(jobs);
   return { ok: true, targets: targets.size, handled };
 }
 
@@ -337,8 +352,7 @@ async function processWebhook(body: any) {
       const v = ch.value || {};
       if (ch.field === 'feed' && v.item === 'comment' && v.verb === 'add') {
         campaigns ??= await activeCampaigns();
-        const delay = 3000 + Math.random() * 7000; // تأخير بشري 3-10 ثواني
-        jobs.push(handleComment({ commentId: v.comment_id, postId: v.post_id, message: v.message || '', fromId: v.from?.id, fromName: v.from?.name, created: v.created_time ? v.created_time * 1000 : Date.now() }, s, campaigns, delay));
+        jobs.push(handleComment({ commentId: v.comment_id, postId: v.post_id, message: v.message || '', fromId: v.from?.id, fromName: v.from?.name, created: v.created_time ? v.created_time * 1000 : Date.now() }, s, campaigns));
       }
     }
     for (const m of entry.messaging || []) {

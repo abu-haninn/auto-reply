@@ -307,8 +307,6 @@ const TIMING = {
   dm:    [10_000, 25_000], // رسالة الماسنجر بعد الرد بـ 10-25 ثانية
 };
 const rand = ([a, b]: number[]) => a + Math.random() * (b - a);
-// "طلب" وهمي بنستخدمه عشان نقفل رسالة الماسنجر لكل شخص على مستوى الصفحة كلها
-const DM_LOCK = '00000000-0000-0000-0000-000000000000';
 const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 90_000)));
 
 async function handleComment(cm: Comment, s: any, campaigns: any[]) {
@@ -370,10 +368,11 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   }
   if (c.dm_enabled) {
     const text = fill(pick(c.dm_messages), vars);
-    // رسالة ماسنجر واحدة بس لكل شخص على الصفحة كلها (حتى لو علّق على أكتر من فيديو/طلب)
+    // رسالة ماسنجر واحدة لكل شخص في كل طلب (فيديو/منشور) — لو علّق على فيديو جديد بتوصله رسالة الفيديو الجديد
+    // حتى لو كلّمنا قبل كده على الماسنجر
     let dmAllowed = true;
     if (cm.fromId) {
-      const { error } = await db.from('user_hits').insert({ campaign_id: DM_LOCK, user_id: `dm:${s.page_id}:${cm.fromId}` });
+      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: `dm:${cm.fromId}` });
       if (error) { dmAllowed = false; await log('skip', `${who} أخد رسالة ماسنجر قبل كده — مش هتتبعتله تاني`); }
     }
     if (text && dmAllowed) {

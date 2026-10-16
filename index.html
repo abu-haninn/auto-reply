@@ -90,12 +90,16 @@
     <!-- ===== الماسنجر ===== -->
     <section class="view" id="tab-messenger">
       <div class="card">
-        <h3>الجزء ده بيعمل إيه؟</h3>
-        <p class="sub" style="margin-top:8px">ده للناس اللي <b>بتبعت رسالة لصفحتك على الماسنجر مباشرة</b> (مش من التعليقات):</p>
-        <div class="check ok"><span class="c">1</span>لو الرسالة فيها كلمة من "ردود بالكلمات" ← بيترد بالرد بتاعها (مثلًا حد كتب "بكام" ← يوصله السعر)</div>
-        <div class="check ok"><span class="c">2</span>لو مفيهاش ← بيوصله "الرد الترحيبي" (مرة واحدة كل 24 ساعة لنفس الشخص)</div>
-        <div class="check ok"><span class="c">3</span>الحاجتين متقفلين؟ ← مفيش رد تلقائي، وإنت ترد بنفسك عادي</div>
-        <div class="note mt">💡 رسائل التعليقات (طلباتك) مالهاش دعوة بالجزء ده — دي بتتظبط من تبويب "الطلبات".</div>
+        <div class="row"><div class="sp"><h3>✨ رد ذكي على كل الرسايل</h3><p class="sub">أي حد يبعتلك على الماسنجر، البوت يرد عليه كأنك إنت، على حسب كلامه</p></div>
+          <label class="sw"><input type="checkbox" id="aiOn"><i></i></label></div>
+        <div class="note mt">💡 البوت بيعرف الحاجات اللي بتقدمها في طلباتك، فلو حد طلب الرابط بيبعتهوله. ولو إنت رديت بنفسك على حد، البوت بيسكت معاه نص ساعة ويسيبك تكمل.</div>
+      </div>
+      <div class="card">
+        <div class="row"><div class="sp"><h3>📢 رسالة لكل الناس</h3><p class="sub">بتوصل لكل اللي بعتولك على الماسنجر آخر 24 ساعة</p></div>
+          <span class="pill" id="bcCount">…</span></div>
+        <div class="field"><textarea class="in" id="bcText" placeholder="اكتب الرسالة… ولو فيها رابط هيتحول لزرار"></textarea></div>
+        <button class="btn btn-y btn-full" id="bcSend"><i data-i="rocket"></i>ابعت للكل</button>
+        <div class="hint" style="margin-top:8px">فيسبوك مش بيسمح تبعت لحد عدّى على آخر رسالة منه أكتر من 24 ساعة — فبنبعت بس للي ينفع، وبالراحة عشان صفحتك تفضل في أمان.</div>
       </div>
       <div class="card">
         <div class="row"><div class="sp"><h3>رد ترحيبي تلقائي</h3><p class="sub">على أي حد يبعت رسالة للصفحة</p></div>

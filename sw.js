@@ -1,6 +1,6 @@
 // خدمة التطبيق: بتخلي التطبيق يفتح بسرعة ويتسطب على الموبايل
 // بنجيب الأحدث من النت الأول، ولو النت مقطوع بنفتح النسخة المحفوظة
-const CACHE = 'auto-reply-v4';
+const CACHE = 'auto-reply-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'config.js', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

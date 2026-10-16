@@ -326,7 +326,9 @@ async function loadDm() {
     $('#autoOn').checked = d.auto_enabled; $('#autoText').value = d.auto_text || '';
     $('#dmFollow').checked = d.follow_button !== false;
     $('#aiOn').checked = !!d.ai_enabled;
-    api('/broadcast/count' + pq()).then((r) => { $('#bcCount').textContent = `${num(r.count)} شخص`; }).catch(() => {});
+    $('#aiAbout').value = d.ai_about || '';
+    $('#bcCount').textContent = '…';
+    api('/broadcast/count' + pq()).then((r) => { $('#bcCount').textContent = r.queued ? `بيتبعت… فاضل ${num(r.queued)}` : `${num(r.count)} شخص`; }).catch(() => {});
     RULES = d.rules.map((r) => ({ keywords: (r.keywords || []).join('، '), reply: r.reply, active: r.active }));
     renderRules();
   } catch { }
@@ -342,19 +344,22 @@ function renderRules() {
 $('#addRule').onclick = () => { RULES = readRules(); RULES.push({ keywords: '', reply: '' }); renderRules(); };
 $('#rules').onclick = (e) => { const b = e.target.closest('[data-rmr]'); if (b) { RULES = readRules(); RULES.splice(Number(b.dataset.rmr), 1); renderRules(); } };
 $('#saveDm').onclick = (e) => busy(e.currentTarget, async () => {
-  await api('/dm', 'PUT', { auto_enabled: $('#autoOn').checked, auto_text: $('#autoText').value, follow_button: $('#dmFollow').checked, ai_enabled: $('#aiOn').checked, rules: readRules() });
+  await api('/dm', 'PUT', dmBody());
   toast('اتحفظ ✓'); loadDm();
 });
+const dmBody = () => ({ auto_enabled: $('#autoOn').checked, auto_text: $('#autoText').value, follow_button: $('#dmFollow').checked, ai_enabled: $('#aiOn').checked, ai_about: $('#aiAbout').value, rules: readRules() });
 // الرد الذكي بيتحفظ أول ما تدوس على الزرار
-$('#aiOn').onchange = () => api('/dm', 'PUT', { auto_enabled: $('#autoOn').checked, auto_text: $('#autoText').value, follow_button: $('#dmFollow').checked, ai_enabled: $('#aiOn').checked, rules: readRules() })
+$('#aiOn').onchange = () => api('/dm', 'PUT', dmBody())
   .then(() => toast($('#aiOn').checked ? 'الرد الذكي اشتغل ✨' : 'الرد الذكي اتقفل'), (e) => toast(e.message, 'err'));
+$('#aiAboutSave').onclick = (e) => busy(e.currentTarget, async () => { await api('/dm', 'PUT', dmBody()); toast('البوت اتعلّم المعلومات دي ✓'); });
 $('#bcSend').onclick = (e) => busy(e.currentTarget, async () => {
   const text = $('#bcText').value.trim();
   if (!text) throw new Error('اكتب الرسالة الأول');
   if (!confirm('هتتبعت الرسالة دي لكل اللي كلموك آخر 24 ساعة. متأكد؟')) return;
   const r = await api('/broadcast' + pq(), 'POST', { text, page_id: CUR_PAGE });
   $('#bcText').value = '';
-  toast(r.sending ? `جاري الإرسال لـ ${num(r.sending)} شخص 📢 (هتلاقي النتيجة في النشاط)` : 'مفيش حد كلمك آخر 24 ساعة', r.sending ? 'ok' : 'err');
+  toast(`بدأ الإرسال لـ ${num(r.sending)} شخص 📢 — هياخد حوالي ${num(r.minutes)} دقيقة، وهتلاقي النتيجة في النشاط`);
+  $('#bcCount').textContent = `بيتبعت… ${num(r.sending)}`;
 });
 
 // ---------- النشاط ----------

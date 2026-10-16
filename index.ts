@@ -146,6 +146,16 @@ function buildMessage(text: string, buttons: Btn[] = []) {
 }
 // لو الأزرار اترفضت لأي سبب نبعت نص عادي فيه الروابط
 const plainWithLinks = (text: string, buttons: Btn[]) => ({ text: cut([text, ...buttons.map((b) => `${b.title}: ${b.url}`)].join('\n'), 2000) });
+// رسالة نص عادي لشخص على الماسنجر (لو تطبيق تاني ماسك المحادثة بناخد التحكم ونبعت تاني)
+async function sendText(s: any, psid: string, msg: string) {
+  const post = () => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: { text: cut(msg, 2000) } }, s.page_token);
+  try { return await post(); }
+  catch (e) {
+    if ((e as FbError).subcode !== 2018300) throw e;
+    try { await fb('POST', `/${s.page_id}/take_thread_control`, { recipient: { id: psid } }, s.page_token); } catch { /* */ }
+    return post();
+  }
+}
 // original = النص الأصلي بالروابط (لو الأزرار اترفضت بنبعته نص عادي والروابط فيه بتبقى قابلة للضغط)
 async function sendPrivateReply(pageId: string, commentId: string, text: string, token: string, buttons: Btn[] = [], original = text) {
   try {
@@ -253,24 +263,29 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   if (!comment.trim()) return '';
   void name; // الاسم مش بيتبعت للذكاء الاصطناعي ومش بيتكتب في الرد
   const system = [
-    `إنت صاحب صفحة فيسبوك "${pageName}" وبترد بنفسك على تعليقات المتابعين، كأنك بتدردش معاهم.`,
-    'رد على كلام الشخص بالظبط زي ما شات جي بي تي بيرد على أي رسالة: لو سلّم رد السلام ("وعليكم السلام، منور/نورت")، لو سأل جاوب، لو شكرك اشكره، لو كتب "تم" أو حاجة قصيرة رد رد قصير لطيف.',
-    'باللهجة المصرية العامية، من جملة لتلات جمل بالكتير، طبيعي ودافي زي إنسان مش بوت، ومختلف كل مرة.',
-    'متكتبش اسم الشخص خالص ومتناديهوش باسمه. استخدم كلام ينفع للراجل والست.',
+    `إنت صاحب صفحة فيسبوك "${pageName}" وبترد بنفسك على تعليقات المتابعين تحت منشوراتك.`,
+    'افهم الشخص عايز إيه بالظبط ورد على قد كلامه بس:',
+    '- سلام أو تحية ← رد السلام في جملة قصيرة ("وعليكم السلام، منوّر").',
+    '- شكر أو مدح أو "تم" أو إيموجي ← رد قصير لطيف في جملة واحدة.',
+    '- سؤال ← جاوب على السؤال نفسه مباشرة في جملة أو اتنين من غير لف ودوران.',
+    '- طلب (الرابط/الشرح/التفاصيل/عايز أشترك) ← طمّنه في جملة واحدة.',
+    '- شكوى أو مشكلة ← اعتذر بلطف ووضّح إنك هتساعده.',
+    'الطول: على قد الإجابة بالظبط — أغلب الردود جملة واحدة، وأقصى حاجة جملتين قصيرين. ممنوع الحشو والمقدمات والكلام المكرر.',
+    'باللهجة المصرية العامية، طبيعي ودافي زي إنسان حقيقي، ومختلف كل مرة. متكتبش اسم الشخص، واستخدم كلام ينفع للراجل والست.',
+    'لو السؤال إجابته مش موجودة في موضوع المنشور ومش متأكد منها: متخترعش أي معلومة أو سعر أو ميعاد. رد رد ذوق يرضيه (مثلًا: "سؤال حلو، هرد عليك بالتفصيل" أو "ابعتلي على الخاص وأنا أفهمك كل حاجة").',
     dmSent
-      ? 'لو الشخص مهتم أو طالب الرابط/الشرح/التفاصيل/التفعيل قوله إنك هتبعتهوله على الخاص (مثلًا: "عينيا ليك، هبعتلك الرابط على الخاص"). لو كلامه سلام أو شكر أو سؤال عادي رد عليه وبس من غير ما تفرض موضوع الخاص.'
+      ? 'لو الشخص مهتم أو طالب الرابط/التفاصيل قوله إنك بعتهوله على الخاص (مثلًا: "عينيا ليك، بعتلك الرابط على الخاص"). لو كلامه سلام أو شكر أو سؤال عادي رد عليه وبس من غير موضوع الخاص.'
       : 'متقولش إنك هتبعت حاجة على الخاص.',
-    'ممنوع: روابط، هاشتاجات، أكتر من إيموجي واحد، وعود بحاجات مش مذكورة في موضوع المنشور، أو إنك تقول إنك ذكاء اصطناعي أو بوت.',
-    'لو التعليق فيه إساءة رد بأدب وهدوء من غير جدال.',
+    'ممنوع: روابط، هاشتاجات، أكتر من إيموجي واحد، أو إنك تقول إنك ذكاء اصطناعي أو بوت. لو فيه إساءة رد بأدب وهدوء من غير جدال.',
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].join('\n');
-  const user = `موضوع المنشور: ${cut(topic, 200) || 'غير معروف'}\nالتعليق: ${cut(comment, 400)}`;
-  const text = (await gemini(system, user)).replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').trim();
-  return text.length >= 3 ? cut(text, 300) : '';
+  const user = `موضوع المنشور: ${cut(topic, 500) || 'غير معروف'}\nالتعليق: ${cut(comment, 400)}`;
+  const text = (await gemini(system, user, 300, 0.8)).replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').trim();
+  return text.length >= 2 ? cut(text, 300) : '';
 }
 
 // نداء Gemini: بنجرب أكتر من موديل، ولو كله مشغول بنستنى ونجرب تاني
-async function gemini(system: string, user: string, maxChars = 300): Promise<string> {
+async function gemini(system: string, user: string, maxChars = 300, temperature = 0.7): Promise<string> {
   const key = env('GEMINI_API_KEY');
   if (!key) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
   // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
@@ -286,7 +301,7 @@ async function gemini(system: string, user: string, maxChars = 300): Promise<str
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature: 1, maxOutputTokens: 1024 },
+        generationConfig: { temperature, maxOutputTokens: 1024 },
       }),
       signal: AbortSignal.timeout(20_000),
     });
@@ -398,18 +413,9 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
 async function handleMessage(psid: string, text: string, s: any) {
   if (!s.page_id || !s.page_token || psid === s.page_id) return;
   const nameOf = async () => { try { const r = await fb('GET', `/${psid}`, { fields: 'name,first_name' }, s.page_token); return r.name || r.first_name || ''; } catch { return ''; } };
-  const send = async (msg: string) => {
-    const p = dmParts(msg, s.page_id, null, null, s.dm_follow_button !== false, s.return_to);
-    const post = (message: any) => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message }, s.page_token);
-    try { return await post(buildMessage(p.text, p.buttons)); }
-    catch (e) {
-      // تطبيق تاني ماسك المحادثة ← ناخد التحكم ونبعت تاني
-      if ((e as FbError).subcode === 2018300) {
-        try { await fb('POST', `/${s.page_id}/take_thread_control`, { recipient: { id: psid } }, s.page_token); } catch { /* */ }
-      }
-      return post(plainWithLinks(msg, p.buttons.filter((b) => !msg.includes(b.url))));
-    }
-  };
+  // رسايل الماسنجر بتتبعت نص عادي: بتظهر عند كل الناس على أي موبايل/كمبيوتر (القوالب بتظهر عند ناس "محتوى غير معروف")
+  // والروابط في النص العادي بتبقى قابلة للضغط لوحدها
+  const send = (msg: string) => sendText(s, psid, msg);
 
   const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
   for (const r of rules || []) {
@@ -445,21 +451,115 @@ async function chatReply(psid: string, text: string, s: any): Promise<string> {
     const msgs = (r.data?.[0]?.messages?.data || []).reverse();
     history = msgs.map((m: any) => `${m.from?.id === s.page_id ? 'إنت' : 'هو'}: ${cut(m.message || '(مرفق)', 300)}`).join('\n');
   } catch { /* */ }
-  const { data: camps } = await db.from('campaigns').select('name,dm_messages,page_id').eq('active', true).limit(15);
+  const { data: camps } = await db.from('campaigns').select('name,posts,dm_messages,button_title,button_url,page_id,created_at').eq('active', true).order('created_at', { ascending: false }).limit(20);
   const knowledge = (camps || []).filter((c: any) => !c.page_id || c.page_id === s.page_id)
-    .map((c: any) => `- ${cut(c.name, 80)}: ${cut((c.dm_messages || [])[0] || '', 400)}`).join('\n');
+    .map((c: any, i: number) => {
+      const posts = (c.posts || []).map((p: any) => cut(p.text || '', 120)).filter(Boolean).join(' / ');
+      return `${i + 1}) ${cut(c.name, 80)}${posts ? ` (عن: ${posts})` : ''}\n   الرسالة اللي بتتبعت للناس: ${cut((c.dm_messages || [])[0] || '', 500)}${c.button_url ? `\n   رابط إضافي: ${c.button_url}` : ''}`;
+    }).join('\n');
   const system = [
-    `إنت صاحب صفحة فيسبوك "${s.page_name}" وبترد بنفسك على رسايل الماسنجر، كأنك بتدردش مع صاحبك.`,
-    'رد زي شات جي بي تي بالظبط على آخر رسالة: لو سلّم رد السلام وقوله "أؤمرني" أو "منور"، لو سأل جاوبه بإيجاز ووضوح، لو شكرك اشكره.',
-    'باللهجة المصرية العامية، من جملة لأربع جمل بالكتير، طبيعي ودافي، ومن غير ما تنادي الشخص باسمه.',
-    knowledge ? `دي الحاجات اللي بتقدمها دلوقتي (لو حد سأل عن حاجة منهم أو طلب الرابط ابعتله الرابط بتاعها زي ما هو بالظبط):\n${knowledge}` : '',
-    'ممنوع تخترع روابط أو أسعار أو مواعيد أو وعود مش مكتوبة فوق. لو مش عارف الإجابة قوله إنك هترد عليه بنفسك قريب.',
-    'ممنوع تقول إنك ذكاء اصطناعي أو بوت. لو فيه إساءة رد بأدب.',
-    'اكتب الرد نفسه بس.',
+    `إنت صاحب صفحة فيسبوك "${s.page_name}" وبترد بنفسك على رسايل الماسنجر.`,
+    'اقرا المحادثة وافهم الشخص عايز إيه بالظبط، ورد على آخر رسالة بس على قد سؤاله:',
+    '- سلام/تحية ← رد السلام في جملة قصيرة واسأله "أؤمرني، أقدر أساعدك في إيه؟".',
+    '- شكر أو "تمام" أو إيموجي ← رد قصير جدًا لطيف.',
+    '- سؤال ← الإجابة نفسها مباشرة من غير مقدمات، في جملة لتلاتة بالكتير.',
+    '- طلب رابط/فيديو/شرح/تفاصيل حاجة من الحاجات اللي تحت ← ابعتله الرابط الصح زي ما هو بالظبط مع سطر قصير يوضح هو إيه. لو مش واضح يقصد أنهي واحد اسأله سؤال واحد قصير، أو ابعت أحدث واحد.',
+    '- شكوى/مشكلة ← اعتذر بلطف واسأله عن التفاصيل اللي تساعدك.',
+    'متكررش كلام اتقال قبل كده في المحادثة، ومتبعتش نفس الرابط تاني لو لسه باعته إلا لو طلبه.',
+    'باللهجة المصرية العامية، طبيعي ودافي زي إنسان حقيقي، ومن غير ما تنادي الشخص باسمه.',
+    s.ai_about ? `معلومات عنك وعن صفحتك (اعتمد عليها في الإجابة):\n${cut(s.ai_about, 2500)}` : '',
+    knowledge ? `الحاجات اللي بتقدمها دلوقتي (الأحدث الأول):\n${knowledge}` : '',
+    'قاعدة مهمة جدًا: متخترعش أي رابط أو سعر أو ميعاد أو معلومة مش مكتوبة فوق. لو الإجابة مش عندك رد رد ذوق يرضيه من غير ما توعده بحاجة محددة (مثلًا: "سؤال حلو، هراجعه وأرد عليك بنفسي في أقرب وقت ❤️") وحط في آخر الرد العلامة [؟].',
+    'ممنوع تقول إنك ذكاء اصطناعي أو بوت. لو فيه إساءة رد بأدب ومن غير جدال.',
+    'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
-  const user = `${history ? 'المحادثة اللي فاتت:\n' + history + '\n\n' : ''}آخر رسالة منه: ${cut(text, 600)}`;
-  const out = await gemini(system, user, 900);
+  const user = `${history ? 'المحادثة اللي فاتت (الأقدم الأول):\n' + history + '\n\n' : ''}آخر رسالة منه: ${cut(text, 600)}`;
+  let out = await gemini(system, user, 900, 0.6);
+  // لو الذكاء الاصطناعي مكنش عارف الإجابة بنعلّم السؤال في "النشاط" عشان ترد عليه بنفسك
+  if (/\[\s*[؟?]\s*\]/.test(out)) {
+    out = out.replace(/\[\s*[؟?]\s*\]/g, '').trim();
+    await log('ask', `❓ سؤال على الماسنجر محتاج ردك: "${cut(text, 120)}"`);
+  }
   return out.length >= 2 ? out : '';
+}
+
+// =====================================================================
+//  الرسالة الجماعية
+//  قانون فيسبوك: تقدر تبعت لأي حد بس خلال 24 ساعة من آخر رسالة هو بعتهالك.
+//  بره الـ 24 ساعة فيسبوك بيرفض الرسالة، ولو اتكررت المحاولات الصفحة ممكن تتقيد.
+// =====================================================================
+const WINDOW_MS = 23.5 * 3600_000; // هامش أمان نص ساعة
+// بنجيب المحادثات اللي على الصفحة فعلًا (مش بس اللي اتسجلت عندنا) ونعرف مين بعت آخر 24 ساعة
+async function syncContacts(page: any) {
+  const since = Date.now() - WINDOW_MS;
+  const rows: any[] = [];
+  let after = '';
+  for (let i = 0; i < 20; i++) {
+    let r: any;
+    try {
+      r = await fb('GET', `/${page.id}/conversations`, { fields: 'updated_time,participants,messages.limit(5){from,created_time}', limit: 50, ...(after ? { after } : {}) }, page.token);
+    } catch { break; }
+    let older = false;
+    for (const c of r.data || []) {
+      if (new Date(c.updated_time).getTime() < since) { older = true; break; }
+      const who = (c.participants?.data || []).find((p: any) => p.id !== page.id);
+      const lastIn = (c.messages?.data || []).find((m: any) => m.from?.id && m.from.id !== page.id);
+      if (who?.id && lastIn && new Date(lastIn.created_time).getTime() >= since) {
+        rows.push({ psid: who.id, page_id: page.id, name: who.name || null, last_in: new Date(lastIn.created_time).toISOString() });
+      }
+    }
+    after = r.paging?.cursors?.after || '';
+    if (older || !after || !r.paging?.next) break;
+  }
+  if (rows.length) await db.from('contacts').upsert(rows);
+  return rows.length;
+}
+async function eligibleContacts(pageId: string) {
+  const { data } = await db.from('contacts').select('psid').eq('page_id', pageId).gte('last_in', new Date(Date.now() - WINDOW_MS).toISOString()).limit(5000);
+  return (data || []).map((p: any) => p.psid as string);
+}
+// بنبعت الرسايل اللي في الطابور واحدة واحدة بالراحة (كل ثانية تقريبًا) — كل دورة بتبعت دفعة وتسيب الباقي للدورة اللي بعدها
+let draining = false;
+async function drainOutbox(budgetMs = 40_000) {
+  if (draining) return;
+  draining = true;
+  try {
+    const started = Date.now();
+    const pages = await getPages();
+    const settings = await getSettings();
+    while (Date.now() - started < budgetMs) {
+      const { data: batch } = await db.from('outbox').select('*').is('claimed_at', null).order('id').limit(10);
+      if (!batch?.length) break;
+      for (const row of batch) {
+        if (Date.now() - started > budgetMs) break;
+        // "حجز" الرسالة عشان متتبعتش مرتين لو دورتين اشتغلوا مع بعض
+        const { data: got } = await db.from('outbox').update({ claimed_at: new Date().toISOString() }).eq('id', row.id).is('claimed_at', null).select('id');
+        if (!got?.length) continue;
+        const page = pages.find((p) => p.id === row.page_id);
+        let error: string | null = null;
+        if (!page) error = 'الصفحة مش مربوطة';
+        else {
+          const { data: ct } = await db.from('contacts').select('last_in').eq('psid', row.psid).maybeSingle();
+          if (!ct?.last_in || Date.now() - new Date(ct.last_in).getTime() > 24 * 3600_000) error = 'عدّى 24 ساعة على آخر رسالة منه';
+          else {
+            try { await sendText(ctxFor(settings, page), row.psid, row.text); }
+            catch (e) { error = explain(e); }
+          }
+        }
+        await db.from('outbox').update({ sent_at: error ? null : new Date().toISOString(), error }).eq('id', row.id);
+        await sleep(900 + Math.random() * 600);
+      }
+    }
+    // لما الطابور يخلص بنكتب النتيجة في النشاط
+    const { count: left } = await db.from('outbox').select('id', { count: 'exact', head: true }).is('claimed_at', null);
+    if (!left) {
+      const { data: done } = await db.from('outbox').update({ reported: true }).eq('reported', false).not('claimed_at', 'is', null).select('sent_at');
+      if (done?.length) {
+        const ok = done.filter((d: any) => d.sent_at).length;
+        await log('dm', `📢 الرسالة الجماعية خلصت: وصلت لـ ${ok} شخص${done.length - ok ? ` (و${done.length - ok} مقدرتش أوصلهم)` : ''}`);
+      }
+    }
+  } finally { draining = false; }
 }
 
 async function activeCampaigns() {
@@ -796,10 +896,10 @@ async function api(req: Request, path: string): Promise<Response> {
   // ---- الماسنجر ----
   if (path === '/dm' && method === 'GET') {
     const { data } = await db.from('dm_rules').select('*').order('created_at');
-    return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, follow_button: s.dm_follow_button !== false, ai_enabled: !!s.dm_ai_enabled, rules: data || [] });
+    return json({ auto_enabled: s.dm_auto_enabled, auto_text: s.dm_auto_text, follow_button: s.dm_follow_button !== false, ai_enabled: !!s.dm_ai_enabled, ai_about: s.ai_about || '', rules: data || [] });
   }
   if (path === '/dm' && method === 'PUT') {
-    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: cut(body.auto_text, 2000), dm_follow_button: body.follow_button !== false, dm_ai_enabled: !!body.ai_enabled });
+    await setSettings({ dm_auto_enabled: !!body.auto_enabled, dm_auto_text: cut(body.auto_text, 2000), dm_follow_button: body.follow_button !== false, dm_ai_enabled: !!body.ai_enabled, ...(body.ai_about !== undefined ? { ai_about: cut(String(body.ai_about || ''), 3000) } : {}) });
     const rules = (body.rules || []).map((r: any) => ({
       active: r.active !== false,
       keywords: (Array.isArray(r.keywords) ? r.keywords : String(r.keywords || '').split(/[,،]/)).map((k: string) => k.trim()).filter(Boolean),
@@ -831,32 +931,26 @@ async function api(req: Request, path: string): Promise<Response> {
   // ---- رسالة جماعية: لكل اللي بعتولك على الماسنجر آخر 24 ساعة (قانون فيسبوك) ----
   if (path === '/broadcast/count' && method === 'GET') {
     if (!cur) return json({ count: 0 });
-    const since = new Date(Date.now() - 23.5 * 3600_000).toISOString();
-    const { count } = await db.from('contacts').select('psid', { count: 'exact', head: true }).eq('page_id', cur.id).gte('last_in', since);
-    return json({ count: count || 0 });
+    await syncContacts(cur);
+    const { count: queued } = await db.from('outbox').select('id', { count: 'exact', head: true }).is('claimed_at', null);
+    return json({ count: (await eligibleContacts(cur.id)).length, queued: queued || 0 });
   }
   if (path === '/broadcast' && method === 'POST') {
     if (!cur) return json({ error: 'اربط صفحة الأول' }, 400);
     const msg = cut(String(body.text || '').trim(), 2000);
     if (!msg) return json({ error: 'اكتب الرسالة الأول' }, 400);
-    const since = new Date(Date.now() - 23.5 * 3600_000).toISOString();
-    const { data: people } = await db.from('contacts').select('psid').eq('page_id', cur.id).gte('last_in', since).limit(80);
-    const list = (people || []).map((p: any) => p.psid);
-    const ps2 = ctxFor(s, cur);
-    background((async () => {
-      let ok = 0, bad = 0;
-      for (const psid of list) {
-        const p = dmParts(msg, ps2.page_id, null, null, ps2.dm_follow_button !== false, ps2.return_to);
-        try {
-          await fb('POST', `/${ps2.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: buildMessage(p.text, p.buttons) }, ps2.page_token)
-            .catch(() => fb('POST', `/${ps2.page_id}/messages`, { recipient: { id: psid }, messaging_type: 'RESPONSE', message: plainWithLinks(msg, p.buttons.filter((b) => !msg.includes(b.url))) }, ps2.page_token));
-          ok++;
-        } catch { bad++; }
-        await sleep(1200 + Math.random() * 800); // بالراحة عشان فيسبوك ميعتبرهاش سبام
-      }
-      await log('dm', `📢 الرسالة الجماعية وصلت لـ ${ok} شخص${bad ? ` (ومقدرتش أوصل لـ ${bad})` : ''}`);
-    })());
-    return json({ ok: true, sending: list.length });
+    const { count: busy } = await db.from('outbox').select('id', { count: 'exact', head: true }).is('claimed_at', null);
+    if (busy) return json({ error: `فيه رسالة جماعية لسه بتتبعت (فاضل ${busy} شخص) — استنى لما تخلص` }, 400);
+    await syncContacts(cur);
+    const list = await eligibleContacts(cur.id);
+    if (!list.length) return json({ error: 'مفيش حد بعتلك آخر 24 ساعة — فيسبوك مش بيسمح تبعت لحد غير كده' }, 400);
+    for (let i = 0; i < list.length; i += 500) {
+      const { error } = await db.from('outbox').insert(list.slice(i, i + 500).map((psid) => ({ page_id: cur.id, psid, text: msg })));
+      if (error) return json({ error: 'قاعدة البيانات محتاجة تحديث (جدول outbox): ' + error.message }, 500);
+    }
+    await log('dm', `📢 بدأت رسالة جماعية لـ ${list.length} شخص (واحدة كل ثانية تقريبًا)`);
+    background(drainOutbox());
+    return json({ ok: true, sending: list.length, minutes: Math.ceil(list.length * 1.3 / 60) });
   }
   // دعم فني: آخر التعليقات اللي اتعالجت، وتجربة رسالة خاصة على تعليق معين عشان نشوف خطأ فيسبوك بالظبط
   if (path === '/diag/recent' && method === 'GET') {
@@ -912,6 +1006,7 @@ Deno.serve(async (req) => {
     // الفحص التلقائي
     if (path === '/cron') {
       background(poll(false));
+      background(drainOutbox().catch((e) => console.error(e)));
       return json({ ok: true });
     }
     // رجوع تسجيل الدخول

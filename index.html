@@ -92,14 +92,17 @@
       <div class="card">
         <div class="row"><div class="sp"><h3>✨ رد ذكي على كل الرسايل</h3><p class="sub">أي حد يبعتلك على الماسنجر، البوت يرد عليه كأنك إنت، على حسب كلامه</p></div>
           <label class="sw"><input type="checkbox" id="aiOn"><i></i></label></div>
-        <div class="note mt">💡 البوت بيعرف الحاجات اللي بتقدمها في طلباتك، فلو حد طلب الرابط بيبعتهوله. ولو إنت رديت بنفسك على حد، البوت بيسكت معاه نص ساعة ويسيبك تكمل.</div>
+        <div class="field mt"><label>معلومات البوت يعتمد عليها في الرد (اختياري)</label>
+          <textarea class="in" id="aiAbout" placeholder="مثلًا: أنا وليد، بشرح تطبيقات الربح من الموبايل. الأسئلة المتكررة وإجاباتها… أرقام التواصل… أي حاجة عايز البوت يعرفها"></textarea>
+          <button class="btn btn-g btn-full" id="aiAboutSave" style="margin-top:8px">حفظ المعلومات</button></div>
+        <div class="note mt">💡 البوت بيعرف الحاجات اللي بتقدمها في طلباتك، فلو حد طلب الرابط أو الفيديو بيبعتهوله. ولو اتسأل سؤال مش عارف إجابته مش بيألّف — بيرد رد ذوق وبيكتبلك السؤال في "النشاط" عشان ترد بنفسك. ولو إنت رديت على حد، البوت بيسكت معاه نص ساعة.</div>
       </div>
       <div class="card">
         <div class="row"><div class="sp"><h3>📢 رسالة لكل الناس</h3><p class="sub">بتوصل لكل اللي بعتولك على الماسنجر آخر 24 ساعة</p></div>
           <span class="pill" id="bcCount">…</span></div>
-        <div class="field"><textarea class="in" id="bcText" placeholder="اكتب الرسالة… ولو فيها رابط هيتحول لزرار"></textarea></div>
+        <div class="field"><textarea class="in" id="bcText" placeholder="اكتب الرسالة… ولو فيها رابط هيبقى قابل للضغط"></textarea></div>
         <button class="btn btn-y btn-full" id="bcSend"><i data-i="rocket"></i>ابعت للكل</button>
-        <div class="hint" style="margin-top:8px">فيسبوك مش بيسمح تبعت لحد عدّى على آخر رسالة منه أكتر من 24 ساعة — فبنبعت بس للي ينفع، وبالراحة عشان صفحتك تفضل في أمان.</div>
+        <div class="hint" style="margin-top:8px">فيسبوك مش بيسمح تبعت لحد عدّى على آخر رسالة منه أكتر من 24 ساعة — فبنبعت بس للي ينفع، رسالة واحدة كل ثانية تقريبًا عشان صفحتك تفضل في أمان. الإرسال بيكمل لوحده حتى لو قفلت الموبايل.</div>
       </div>
       <div class="card">
         <div class="row"><div class="sp"><h3>رد ترحيبي تلقائي</h3><p class="sub">على أي حد يبعت رسالة للصفحة</p></div>

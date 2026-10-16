@@ -768,6 +768,18 @@ async function api(req: Request, path: string): Promise<Response> {
     try { out.messagingFeatures = (await fb('GET', `/${cur.id}/messaging_feature_review`, {}, cur.token)).data; } catch (e) { out.featErr = (e as Error).message; }
     return json(out);
   }
+  // دعم فني: آخر التعليقات اللي اتعالجت، وتجربة رسالة خاصة على تعليق معين عشان نشوف خطأ فيسبوك بالظبط
+  if (path === '/diag/recent' && method === 'GET') {
+    const { data } = await db.from('processed').select('comment_id,user_id,at').order('at', { ascending: false }).limit(10);
+    return json({ recent: data || [] });
+  }
+  if (path === '/diag/dm' && method === 'POST') {
+    if (!cur) return json({ error: 'مفيش صفحة' }, 400);
+    try {
+      const r = await fb('POST', `/${cur.id}/messages`, { recipient: { comment_id: String(body.comment_id || '') }, message: { text: cut(String(body.text || 'رسالة تجربة ✅'), 500) } }, cur.token);
+      return json({ ok: true, r });
+    } catch (e) { const f = e as FbError; return json({ ok: false, code: f.code, subcode: f.subcode, message: f.message }); }
+  }
   // تجربة الرد الذكي من لوحة التحكم (من غير ما يتنشر حاجة)
   if (path === '/ai-test' && method === 'POST') {
     try {

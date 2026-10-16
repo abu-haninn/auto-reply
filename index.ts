@@ -105,7 +105,7 @@ async function fb(method: string, path: string, params: Record<string, unknown> 
 function explain(e: any) {
   const c = e?.code;
   if (c === 190) return 'التوكن انتهى — اربط الصفحة من جديد';
-  if (c === 10 || c === 200 || c === 3) return 'صلاحية ناقصة — لازم التطبيق يكون Live (شوف الدليل)';
+  if (c === 10 || c === 200 || c === 3) return `صلاحية ناقصة من فيسبوك (كود ${c}${e?.subcode ? '/' + e.subcode : ''}: ${cut(e?.message || '', 120)})`;
   if (c === 368) return 'فيسبوك وقف الإجراء مؤقتًا (سبام) — نوّع الردود';
   if (c === 551 || e?.subcode === 1545041) return 'الشخص ده قافل الرسائل';
   if (c === 4 || c === 17 || c === 32 || c === 613) return 'ضغط كبير على فيسبوك — هيتحاول تاني';
@@ -754,6 +754,19 @@ async function api(req: Request, path: string): Promise<Response> {
   if (path === '/logs' && method === 'GET') {
     const { data } = await db.from('logs').select('*').order('at', { ascending: false }).limit(80);
     return json({ logs: data || [] });
+  }
+  // فحص الصلاحيات اللي فيسبوك مديهالنا على توكن الصفحة (للدعم الفني)
+  if (path === '/diag' && method === 'GET') {
+    if (!cur) return json({ error: 'مفيش صفحة' }, 400);
+    const out: any = { page: cur.name };
+    try {
+      const d = await fb('GET', '/debug_token', { input_token: cur.token }, `${env('FB_APP_ID')}|${env('FB_APP_SECRET')}`);
+      out.type = d.data?.type; out.valid = d.data?.is_valid; out.expires = d.data?.expires_at;
+      out.scopes = d.data?.scopes; out.granular = (d.data?.granular_scopes || []).map((g: any) => g.scope + ':' + (g.target_ids || []).length);
+    } catch (e) { out.debugErr = (e as Error).message; }
+    try { out.subscribed = (await fb('GET', `/${cur.id}/subscribed_apps`, {}, cur.token)).data; } catch (e) { out.subErr = (e as Error).message; }
+    try { out.messagingFeatures = (await fb('GET', `/${cur.id}/messaging_feature_review`, {}, cur.token)).data; } catch (e) { out.featErr = (e as Error).message; }
+    return json(out);
   }
   // تجربة الرد الذكي من لوحة التحكم (من غير ما يتنشر حاجة)
   if (path === '/ai-test' && method === 'POST') {

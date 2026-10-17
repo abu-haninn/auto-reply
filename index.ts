@@ -313,7 +313,12 @@ async function generateSmart(comment: string, name: string, pageName: string, to
 //  - بعد موديلات Gemini بنجرب موديلات Gemma (حصتها المجانية كبيرة جدًا)
 //  - تقدر تحط أكتر من مفتاح (GEMINI_API_KEY_2 و GEMINI_API_KEY_3) عشان الحصة تتضاعف
 // =====================================================================
-const AI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash-lite', 'gemma-3-27b-it', 'gemma-3-12b-it'];
+// كل موديل ليه حصة مجانية لوحده — فبنلف عليهم: الأسرع الأول (lite) وبعدين flash وبعدين Gemma
+const AI_MODELS = [
+  'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite-preview',
+  'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3-flash-preview',
+  'gemma-4-26b-a4b-it', 'gemma-4-31b-it',
+];
 const aiKeys = () => [env('GEMINI_API_KEY'), env('GEMINI_API_KEY_2'), env('GEMINI_API_KEY_3')].flatMap((k) => String(k || '').split(',')).map((k) => k.trim()).filter(Boolean);
 // "retry in 11h51m17s" ← بالمللي ثانية
 function retryAfterMs(msg: string) {
@@ -1034,8 +1039,12 @@ async function api(req: Request, path: string): Promise<Response> {
   // تجربة الرد الذكي من لوحة التحكم (من غير ما يتنشر حاجة)
   if (path === '/ai-test' && method === 'POST') {
     try {
-      const text = await generateSmart(String(body.comment || ''), String(body.name || 'أحمد محمد'), cur?.name || 'صفحتك', String(body.topic || ''), body.dm !== false);
-      return json({ ok: !!text, text });
+      // نفس اللي بيحصل مع التعليقات الحقيقية بالظبط (التعليقات القصيرة بتاخد رد جاهز فوري)
+      const comment = String(body.comment || ''), dm = body.dm !== false;
+      const text = needsAI(comment)
+        ? await generateSmart(comment, '', cur?.name || 'صفحتك', String(body.topic || ''), dm)
+        : quickReply(comment, dm) || interestReply(dm);
+      return json({ ok: !!text, text, model: needsAI(comment) ? geminiModelOk : 'رد جاهز' });
     } catch (e) { return json({ ok: false, error: (e as Error).message }); }
   }
   if (path === '/poll-now' && method === 'POST') {

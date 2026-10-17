@@ -55,9 +55,31 @@ async function api(path, method = 'GET', body) {
 function toast(msg, type = 'ok') {
   const t = document.createElement('div');
   t.className = 'toast ' + type;
-  t.innerHTML = icon(type === 'err' ? 'info' : 'check') + `<span>${esc(msg)}</span>`;
-  $('#toasts').appendChild(t);
-  setTimeout(() => { t.style.transition = '.3s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 4000);
+  // بنشيل الإيموجي من أول/آخر الرسالة لأن الأيقونة موجودة
+  const clean = String(msg).replace(/^[\p{Extended_Pictographic}️✓\s]+|[\p{Extended_Pictographic}️✓\s]+$/gu, '') || msg;
+  t.innerHTML = `<span class="ti">${icon(type === 'err' ? 'info' : 'check')}</span><span>${esc(clean)}</span>`;
+  const box = $('#toasts');
+  while (box.children.length >= 2) box.firstElementChild.remove(); // رسالتين بالكتير على الشاشة
+  box.appendChild(t);
+  setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 300); }, type === 'err' ? 5000 : 3200);
+}
+// الأرقام بتعد لحد الرقم الجديد + الكارت بيلمع لما يزيد
+function countTo(el, to) {
+  if (!el) return;
+  const from = Number(el.dataset.v || 0);
+  el.dataset.v = to;
+  if (from === to) { el.textContent = num(to); return; }
+  if (from && to > from) el.closest('.tile')?.classList.remove('bump'), void el.offsetWidth, el.closest('.tile')?.classList.add('bump');
+  const t0 = performance.now(), dur = from ? 700 : 900;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = num(Math.round(from + (to - from) * e));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function setStats(c, r, m) {
+  countTo($('#sComments'), c); countTo($('#sReplies'), r); countTo($('#sMessages'), m); countTo($('#sTotal'), r + m);
 }
 async function busy(btn, fn) {
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
@@ -116,9 +138,7 @@ async function loadStatus() {
   pill.className = 'pill ' + (live ? 'on' : 'off');
   pill.innerHTML = live ? '<span class="pulse"></span>شغال 24 ساعة' : page ? 'مفيش طلبات شغالة' : 'الصفحة مش مربوطة';
   if (ST.pages.length < 2) {
-    $('#sComments').textContent = num(ST.totals.comments);
-    $('#sReplies').textContent = num(ST.totals.replies);
-    $('#sMessages').textContent = num(ST.totals.messages);
+    setStats(ST.totals.comments, ST.totals.replies, ST.totals.messages);
   }
 }
 function renderPageSwitch() {
@@ -152,9 +172,7 @@ async function loadRequests() {
   if (ST && ST.pages.length > 1) {
     REQS = REQS.filter((c) => reqPage(c) === CUR_PAGE);
     const sum = (k) => REQS.reduce((a, c) => a + (c[k] || 0), 0);
-    $('#sComments').textContent = num(sum('matched'));
-    $('#sReplies').textContent = num(sum('replied'));
-    $('#sMessages').textContent = num(sum('messaged'));
+    setStats(sum('matched'), sum('replied'), sum('messaged'));
   }
   const box = $('#reqList');
   if (!REQS.length) {
@@ -171,9 +189,9 @@ async function loadRequests() {
         <div class="center"><label class="sw"><input type="checkbox" data-toggle="${c.id}" ${c.active ? 'checked' : ''}><i></i></label>
           <div class="status-txt ${c.active ? 'on' : 'off'}">${c.active ? 'شغال' : 'متوقف'}</div></div>
       </div>
-      <div class="req-nums">${[['matched', 'تعليق', 'msg'], ['replied', 'رد', 'reply'], ['messaged', 'رسالة ماسنجر', 'chat']].map(([k, l, ic]) => {
+      <div class="req-nums">${[['matched', 'تعليق', 'msg', 'y'], ['replied', 'رد', 'reply', 'g'], ['messaged', 'رسالة ماسنجر', 'chat', 'b']].map(([k, l, ic, col]) => {
         const changed = PREV[c.id] && PREV[c.id][k] !== c[k];
-        return `<div class="${changed ? 'bump' : ''}">${icon(ic)}<b>${num(c[k])}</b><small>${l}</small></div>`;
+        return `<div class="n-${col} ${changed ? 'bump' : ''}">${icon(ic)}<b>${num(c[k])}</b><small>${l}</small></div>`;
       }).join('')}</div>
       <div class="row"><span class="small muted sp">${c.all_posts ? 'كل المنشورات' : `${num((c.posts || []).length)} منشور`}${c.active ? ' · <span class="live-dot"></span> بيتحدث لوحده' : ''}</span>
         <button class="btn btn-g btn-sm" data-edit="${c.id}">${icon('edit')}تعديل</button>
@@ -249,7 +267,7 @@ function openSheet(c) {
   $('#btnDetails').open = !!(c && c.button_url);
   $('#fLike').checked = c ? c.like_comment : true;
   $('#fOnce').checked = c ? c.one_per_user : true;
-  $('#fFollow').checked = c ? c.follow_button !== false : true;
+  $('#fFollow').checked = false; // مفيش أزرار — الروابط بتتبعت عادي
   $('#fSmart').checked = c ? c.smart_reply !== false : true;
   syncSmart();
   $('#fName').value = c ? c.name : '';
@@ -363,11 +381,15 @@ $('#bcSend').onclick = (e) => busy(e.currentTarget, async () => {
 });
 
 // ---------- النشاط ----------
-const logIc = { comment: 'msg', reply: 'reply', dm: 'chat', error: 'info', system: 'gear', skip: 'info' };
+const logIc = { comment: 'msg', reply: 'reply', dm: 'chat', system: 'gear', ask: 'info' };
+const logTitle = { comment: 'تعليق جديد', reply: 'رد على تعليق', dm: 'ماسنجر', system: 'النظام', ask: 'سؤال محتاج ردك' };
 async function loadLogs() {
   try {
     const { logs } = await api('/logs');
-    $('#logs').innerHTML = logs.map((l) => `<div class="log ${l.type}"><div class="ic">${icon(logIc[l.type] || 'info')}</div><div class="t">${esc(l.text)}<time>${ago(l.at)}</time></div></div>`).join('')
+    // الأخطاء والتفاصيل الفنية مش بتظهر — النشاط المهم بس
+    const shown = logs.filter((l) => logIc[l.type]);
+    const txt = (s) => esc(String(s).replace(/^[\p{Extended_Pictographic}️❌✅⚠️\s]+/u, ''));
+    $('#logs').innerHTML = shown.map((l) => `<div class="log ${l.type}"><div class="ic">${icon(logIc[l.type])}</div><div class="t"><b>${logTitle[l.type]}</b>${txt(l.text)}<time>${ago(l.at)}</time></div></div>`).join('')
       || '<div class="center muted" style="padding:30px 0">لسه مفيش نشاط — أول ما حد يعلّق بالكلمة هيظهر هنا</div>';
   } catch { }
 }

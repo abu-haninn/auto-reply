@@ -77,10 +77,16 @@
 
       <div id="mainBox" class="hidden">
         <div class="page-switch hidden" id="pageSwitch"></div>
-        <div class="stats">
-          <div class="stat"><div class="l"><i data-i="msg"></i>تعليقات</div><div class="n" id="sComments">0</div></div>
-          <div class="stat"><div class="l"><i data-i="reply"></i>ردود</div><div class="n" id="sReplies">0</div></div>
-          <div class="stat"><div class="l"><i data-i="chat"></i>رسائل</div><div class="n" id="sMessages">0</div></div>
+        <div class="dash">
+          <div class="dash-h">
+            <div><small>اتبعت لحد دلوقتي</small><b id="sTotal">0</b><span class="dash-sub">رد ورسالة — من غير ما تلمس الموبايل</span></div>
+            <span class="dash-live"><span class="pulse"></span>مباشر</span>
+          </div>
+          <div class="dash-grid">
+            <div class="tile t-y"><span class="ti"><i data-i="msg"></i></span><b id="sComments">0</b><small>تعليق اتلقط</small></div>
+            <div class="tile t-g"><span class="ti"><i data-i="reply"></i></span><b id="sReplies">0</b><small>رد على تعليق</small></div>
+            <div class="tile t-b"><span class="ti"><i data-i="chat"></i></span><b id="sMessages">0</b><small>رسالة ماسنجر</small></div>
+          </div>
         </div>
         <button class="btn btn-y btn-lg btn-full" id="newBtn"><i data-i="plus"></i>طلب جديد</button>
         <div id="reqList" class="mt"></div>
@@ -109,7 +115,7 @@
           <label class="sw"><input type="checkbox" id="autoOn"><i></i></label></div>
         <div class="field"><textarea class="in" id="autoText"></textarea>
           <div class="hint">اكتب {first_name} مكان اسم الشخص</div></div>
-        <label class="sw mt" style="width:100%"><span class="sp"><b>زرار "👍 تابع الصفحة" تحت الردود</b></span><input type="checkbox" id="dmFollow" checked><i></i></label>
+        <input type="checkbox" id="dmFollow" class="hidden">
       </div>
       <div class="card">
         <div class="row"><div class="sp"><h3>ردود بالكلمات</h3><p class="sub">لو الرسالة فيها كلمة معينة يترد برد معين</p></div></div>
@@ -192,11 +198,11 @@
       <div class="step-h"><span class="num">4</span><b>رسالة الماسنجر</b><label class="sw"><input type="checkbox" id="fDmOn" checked><i></i></label></div>
       <div id="dmField">
         <div class="field"><textarea class="in" id="fDm" style="min-height:120px"></textarea>
-          <div class="hint">🔗 أي رابط تكتبه هنا (فيديو، يوتيوب، موقع) بيتحول لزرار يتداس عليه ويفتح على طول</div></div>
-        <details class="more" id="btnDetails"><summary>+ إضافة زرار برابط (اختياري)</summary>
-          <div class="row mt"><input class="in" id="fBtnTitle" maxlength="20" placeholder="اسم الزرار"><input class="in ltr" id="fBtnUrl" placeholder="https://..."></div>
+          <div class="hint">🔗 أي رابط تكتبه هنا (فيديو، يوتيوب، موقع) بيوصل رابط عادي — الشخص يدوس عليه يفتح على طول</div></div>
+        <details class="more" id="btnDetails"><summary>+ رابط إضافي في آخر الرسالة (اختياري)</summary>
+          <div class="row mt"><input class="in" id="fBtnTitle" maxlength="20" placeholder="الاسم (زي: الشرح)"><input class="in ltr" id="fBtnUrl" placeholder="https://..."></div>
         </details>
-        <label class="sw mt" style="width:100%"><span class="sp"><b>زرار "👍 تابع الصفحة" تحت الرسالة</b><br><span class="small muted">الشخص بيدوس عليه يفتح صفحتك ويتابعها — الشرح بيوصله في كل الأحوال</span></span><input type="checkbox" id="fFollow" checked><i></i></label>
+        <input type="checkbox" id="fFollow" class="hidden">
       </div>
     </div>
     <div class="step">

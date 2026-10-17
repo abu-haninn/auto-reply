@@ -252,11 +252,33 @@ function findCampaign(campaigns: any[], postId: string, message: string) {
 // =====================================================================
 //  الرد الذكي (Google Gemini — فيه حصة مجانية): رد مناسب لكلام كل شخص
 // =====================================================================
-const FALLBACK_REPLY = 'عينيا ليك ❤️ بعتلك التفاصيل على الخاص 📩';
 async function smartReply(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
+  // التعليقات القصيرة ("رابط"، "مهتم"، "تم"، إيموجي) مش محتاجة ذكاء اصطناعي — بنرد عليها فورًا برد جاهز
+  // وبنوفر حصة الذكاء الاصطناعي للأسئلة والكلام الحقيقي (وللماسنجر)
+  if (!needsAI(comment)) return quickReply(comment, dmSent);
   try { return await generateSmart(comment, name, pageName, topic, dmSent); }
-  catch (e) { await log('error', `⚠️ الرد الذكي: ${(e as Error).message} — اتبعت رد عادي بداله`); return ''; }
+  catch (e) {
+    const msg = (e as Error).message;
+    if (!/حصة|quota/i.test(msg)) await log('error', `⚠️ الرد الذكي: ${msg} — اتبعت رد عادي بداله`);
+    return quickReply(comment, dmSent);
+  }
 }
+const QUESTION_RE = /[؟?]|ازاي|إزاي|ازى|ليه|امتى|إمتى|فين|بكام|كام|هل |ايه|إيه|مين|يعني|ينفع|اعمل|أعمل|مش شغال|مشكل|بيدفع|حقيقي|نصب|نصاب|كذب/;
+function needsAI(text: string) {
+  const t = text.replace(/[\p{Extended_Pictographic}\s.!،,]+/gu, ' ').trim();
+  if (t.length < 3) return false;
+  return QUESTION_RE.test(text) || t.split(/\s+/).length >= 4;
+}
+const pickOne = (a: string[]) => a[Math.floor(Math.random() * a.length)];
+function quickReply(comment: string, dmSent: boolean) {
+  const t = comment.trim();
+  if (/سلام|السلام|اهلا|أهلا|مساء|صباح|هاي|hi|hello/i.test(t)) return pickOne(['وعليكم السلام، منوّر 🌹', 'وعليكم السلام ورحمة الله ❤️', 'أهلًا بيك، منوّر الصفحة 🙏']);
+  if (/شكر|تسلم|حلو|جميل|روعه|روعة|عاش|ممتاز|الله|برافو|❤|👍|🔥|😍/i.test(t) && !/رابط|لينك|عايز|مهتم/.test(t)) return pickOne(['تسلم يا رب، منوّر ❤️', 'ربنا يخليك، نورت 🙏', 'شكرًا ليك من القلب ❤️']);
+  return ''; // "رابط"/"مهتم" ← الردود اللي إنت كاتبها في الطلب (أو ردود جاهزة متنوعة)
+}
+const interestReply = (dmSent: boolean) => dmSent
+  ? pickOne(['عينيا ليك، بعتلك على الخاص 📩', 'تم، شيك على الماسنجر ✅', 'بعتلك كل حاجة على الخاص ❤️', 'وصلتك رسالة على الماسنجر، شوفها 📩', 'تمام، بصّ على الخاص 👌'])
+  : pickOne(['منوّر ❤️', 'تسلم يا رب 🙏', 'نورت الصفحة 🌹']);
 async function generateSmart(comment: string, name: string, pageName: string, topic: string, dmSent: boolean): Promise<string> {
   const key = env('GEMINI_API_KEY');
   if (!key) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
@@ -285,43 +307,82 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   return text.length >= 2 ? cut(text, 300) : '';
 }
 
-// نداء Gemini: بنجرب أكتر من موديل، ولو كله مشغول بنستنى ونجرب تاني
-async function gemini(system: string, user: string, maxChars = 300, temperature = 0.7): Promise<string> {
-  const key = env('GEMINI_API_KEY');
-  if (!key) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
-  // جوجل بتوقف موديلات قديمة من وقت للتاني — بنجرب أكتر من موديل بالترتيب ونفتكر اللي اشتغل
-  const list = [...new Set([geminiModelOk, env('GEMINI_MODEL'), 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-flash-lite-latest'].filter(Boolean))] as string[];
-  // لو كله مشغول بنستنى شوية ونجرب تاني (الرد أصلًا بيتأخر دقيقة فعندنا وقت)
-  const models = [...list, '__wait__', ...list, '__wait__', ...list];
-  let lastErr = '';
-  const deadline = Date.now() + 45_000; // أقصى وقت للمحاولات كلها عشان الرد ميتأخرش
-  for (const model of models) {
-    if (Date.now() > deadline) break;
-    if (model === '__wait__') { await sleep(4000); continue; }
-    // لو الموديل اتأخر قوي في الرد بنجرب اللي بعده بدل ما نقف
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: [{ text: user }] }],
-        generationConfig: { temperature, maxOutputTokens: 1024 },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    }).catch((e) => { lastErr = (e as Error).message; return null; });
-    if (!res) continue;
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      lastErr = data?.error?.message || `HTTP ${res.status}`;
-      // الموديل مش موجود/اتوقف/عليه ضغط/خلصت حصته ← جرب اللي بعده؛ مشكلة في المفتاح نفسه ← نوقف
-      if ([404, 429, 500, 503].includes(res.status) || /no longer available|not found|not supported|deprecated|high demand|overloaded|unavailable|quota/i.test(lastErr)) continue;
-      throw new Error(lastErr);
-    }
-    geminiModelOk = model;
-    const text = (data.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('').trim();
-    return cut(text.replace(/^["'«“]+|["'»”]+$/g, '').trim(), maxChars);
+// =====================================================================
+//  نداء Gemini — سريع ومن غير تهنيج:
+//  - بنجرب أسرع موديل الأول، ولو حصته المجانية خلصت بنفتكر ده (في قاعدة البيانات) ومنجربهوش تاني لحد ما الحصة ترجع
+//  - بعد موديلات Gemini بنجرب موديلات Gemma (حصتها المجانية كبيرة جدًا)
+//  - تقدر تحط أكتر من مفتاح (GEMINI_API_KEY_2 و GEMINI_API_KEY_3) عشان الحصة تتضاعف
+// =====================================================================
+const AI_MODELS = ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash-lite', 'gemma-3-27b-it', 'gemma-3-12b-it'];
+const aiKeys = () => [env('GEMINI_API_KEY'), env('GEMINI_API_KEY_2'), env('GEMINI_API_KEY_3')].flatMap((k) => String(k || '').split(',')).map((k) => k.trim()).filter(Boolean);
+// "retry in 11h51m17s" ← بالمللي ثانية
+function retryAfterMs(msg: string) {
+  const m = msg.match(/retry in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s/i);
+  if (!m) return /per ?day|daily|PerDay/i.test(msg) ? 6 * 3600_000 : 60_000;
+  return ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000 + 5_000;
+}
+let aiCool: Record<string, number> | null = null; // موديل ← لحد إمتى حصته خلصانة
+let aiCoolAt = 0;
+async function getCool() {
+  if (!aiCool || Date.now() - aiCoolAt > 60_000) {
+    const { data } = await db.from('settings').select('ai_cooldown').eq('id', 1).maybeSingle();
+    aiCool = (data?.ai_cooldown as Record<string, number>) || {};
+    aiCoolAt = Date.now();
   }
-  throw new Error(lastErr || 'مفيش موديل Gemini متاح');
+  return aiCool;
+}
+async function setCool(id: string, ms: number) {
+  const c = await getCool();
+  c[id] = Date.now() + ms;
+  for (const k of Object.keys(c)) if (c[k] < Date.now()) delete c[k];
+  await db.from('settings').update({ ai_cooldown: c }).eq('id', 1).then(() => {}, () => {});
+}
+async function gemini(system: string, user: string, maxChars = 300, temperature = 0.7, budgetMs = 25_000): Promise<string> {
+  const keys = aiKeys();
+  if (!keys.length) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
+  const cool = await getCool();
+  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), ...AI_MODELS].filter(Boolean))] as string[];
+  const deadline = Date.now() + budgetMs;
+  let lastErr = '';
+  for (let round = 0; round < 2; round++) {
+    let busy = false;
+    for (const [ki, key] of keys.entries()) {
+      for (const model of models) {
+        const id = `${ki}:${model}`;
+        if ((cool[id] || 0) > Date.now()) continue; // حصته خالصة — منضيعش وقت
+        if (Date.now() > deadline) throw new Error(lastErr || 'الذكاء الاصطناعي اتأخر');
+        const gemma = model.startsWith('gemma');
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          body: JSON.stringify({
+            // Gemma مش بيقبل تعليمات نظام منفصلة — بنحطها في أول الرسالة
+            ...(gemma ? {} : { systemInstruction: { parts: [{ text: system }] } }),
+            contents: [{ role: 'user', parts: [{ text: gemma ? `${system}\n\n----\n${user}` : user }] }],
+            generationConfig: { temperature, maxOutputTokens: 800 },
+          }),
+          signal: AbortSignal.timeout(Math.min(10_000, Math.max(2_000, deadline - Date.now()))),
+        }).catch((e) => { lastErr = (e as Error).message; busy = true; return null; });
+        if (!res) continue;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          lastErr = data?.error?.message || `HTTP ${res.status}`;
+          if (res.status === 429 || /quota|rate limit|exhausted/i.test(lastErr)) { await setCool(id, retryAfterMs(lastErr)); continue; }
+          if (res.status === 404 || /no longer available|not found|not supported|deprecated/i.test(lastErr)) { await setCool(id, 24 * 3600_000); continue; }
+          if (res.status >= 500 || /high demand|overloaded|unavailable/i.test(lastErr)) { busy = true; continue; }
+          if (res.status === 400 && /API key|API_KEY/i.test(lastErr)) break; // المفتاح ده نفسه فيه مشكلة ← المفتاح اللي بعده
+          await setCool(id, 3600_000); continue;
+        }
+        const text = (data.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('').trim();
+        if (!text) { lastErr = 'رد فاضي'; continue; }
+        geminiModelOk = model;
+        return cut(text.replace(/^["'«“]+|["'»”]+$/g, '').trim(), maxChars);
+      }
+    }
+    if (!busy) break; // كله حصته خالصة — مفيش فايدة نستنى
+    await sleep(1500);
+  }
+  throw new Error(/quota|exhausted/i.test(lastErr) || !lastErr ? 'حصة الذكاء الاصطناعي المجانية خلصت النهارده' : lastErr);
 }
 let geminiModelOk = '';
 
@@ -329,12 +390,18 @@ let geminiModelOk = '';
 // مواعيد شبه الإنسان: مش فوري (بيبان بوت) ومش متأخر قوي (الشخص بيمشي).
 // كله بيخلص في أقل من دقيقتين عشان حدود السيرفر المجاني (150 ثانية).
 const TIMING = {
-  like:  [15_000, 35_000], // اللايك بعد 15-35 ثانية
-  reply: [45_000, 75_000], // الرد على التعليق بعد 45-75 ثانية (حوالي دقيقة)
-  dm:    [10_000, 25_000], // رسالة الماسنجر بعد الرد بـ 10-25 ثانية
+  like:  [3_000, 8_000],   // اللايك بعد 3-8 ثواني
+  dm:    [6_000, 14_000],  // رسالة الماسنجر بعد 6-14 ثانية (أول تعليق للشخص على الفيديو)
+  reply: [10_000, 22_000], // الرد على التعليق بعد 10-22 ثانية
 };
 const rand = ([a, b]: number[]) => a + Math.random() * (b - a);
 const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 90_000)));
+
+// رسالة الماسنجر نص عادي: الروابط بتتداس وتفتح على طول (من غير أزرار)
+function dmText(text: string, c: any) {
+  const extra = c.button_url && !text.includes(c.button_url) ? `\n\n${c.button_title ? c.button_title + ': ' : '🔗 '}${c.button_url}` : '';
+  return cut(text + extra, 2000);
+}
 
 async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   if (!s.page_id || !s.page_token || !cm.commentId) return;
@@ -343,41 +410,38 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
   if (!c) return;
   if (cm.created && cm.created < new Date(c.since).getTime() - 60_000) return; // تعليق قديم قبل تشغيل الطلب
 
-  // لو فيسبوك مبعتش صاحب التعليق نجيبه (عشان نقدر نمنع تكرار الرد لنفس الشخص)
+  // لو فيسبوك مبعتش صاحب التعليق نجيبه (عشان رسالة الماسنجر تتبعت مرة واحدة بس لكل شخص)
   if (!cm.fromId) {
     try { const r = await fb('GET', `/${cm.commentId}`, { fields: 'from{id,name}' }, s.page_token); cm.fromId = r.from?.id; cm.fromName ||= r.from?.name; } catch { /* */ }
-  }  const who = cm.fromName || 'متابع';
+  }
+  const who = cm.fromName || 'متابع';
   if (!(await claim(cm.commentId, c.id, cm.fromId))) return; // التعليق ده اتعالج بالفعل
   if (cm.fromId && cm.fromId === s.page_id) return;
-  // رد واحد بس لكل شخص: "حجز" الشخص في قاعدة البيانات نفسها — لو كتب 15 تعليق في نفس اللحظة واحد بس اللي بيعدي
-  if (c.one_per_user) {
-    if (cm.fromId) {
-      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: cm.fromId });
-      if (error) { await log('skip', `${who} علّق تاني — اتجاهل عشان أخد رد قبل كده`); return; }
-    } else {
-      // فيسبوك مخبي صاحب التعليق (التطبيق لسه في وضع التجربة): حماية من السبام —
-      // رد واحد بس كل 45 ثانية لكل طلب على التعليقات المجهولة
-      const slot = `anon-${Math.floor(Date.now() / 45_000)}`;
-      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: slot });
-      if (error) { await log('skip', 'تعليق مجهول الصاحب اتجاهل (حماية من التكرار — رد واحد كل 45 ثانية)'); return; }
-    }
-  }
 
   await bump(c.id, 'matched');
   await log('comment', `💬 ${who}: "${cut(cm.message, 80)}" ← ${c.name}`);
+
+  // كل تعليق بياخد رد. رسالة الماسنجر بس هي اللي مرة واحدة لكل شخص في كل فيديو/منشور:
+  // "حجز" في قاعدة البيانات — لو كتب 100 تعليق في نفس اللحظة رسالة واحدة بس اللي بتعدي
+  const dmText0 = c.dm_enabled ? fill(pick(c.dm_messages), { name: cm.fromName, page: s.page_name }) : '';
+  let sendDm = false;
+  if (dmText0) {
+    const who2 = cm.fromId || `anon-${Math.floor(Date.now() / 60_000)}`; // صاحب التعليق مش معروف ← رسالة واحدة كل دقيقة على الفيديو
+    const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: `dm:${tail(cm.postId)}:${who2}` });
+    sendDm = !error;
+  }
+
   // كل المواعيد محسوبة من لحظة كتابة التعليق؛ لو التعليق اتلقط متأخر بنكمل بفواصل صغيرة
   const base = Math.min(cm.created || Date.now(), Date.now());
   const likeAt = base + rand(TIMING.like);
-  const replyAt = Math.max(base + rand(TIMING.reply), likeAt + 3_000);
-
-  const vars = { name: cm.fromName, page: s.page_name };
+  const dmAt = Math.max(base + rand(TIMING.dm), likeAt + 2_000);
+  const replyAt = Math.max(base + rand(TIMING.reply), (sendDm ? dmAt : likeAt) + 3_000);
   const fail = async (what: string, e: unknown) => { await bump(c.id, 'errors'); await log('error', `❌ ${what} (${who}): ${explain(e)}`); };
 
-  // الرد الذكي بيتكتب في الخلفية وإحنا مستنيين ميعاد الرد (عشان ميأخرش حاجة)
-  const dmWillSend = !!(c.dm_enabled && (c.dm_messages || []).length);
+  // الرد الذكي بيتكتب في الخلفية وإحنا مستنيين (عشان ميأخرش حاجة)
   const topic = [c.name, ...(c.posts || []).map((p: any) => p.text)].filter(Boolean).join(' — ');
   const smart = c.reply_enabled && c.smart_reply !== false
-    ? smartReply(cm.message, cm.fromName || '', s.page_name || '', topic, dmWillSend)
+    ? smartReply(cm.message, cm.fromName || '', s.page_name || '', topic, !!dmText0)
     : Promise.resolve('');
 
   if (c.like_comment) {
@@ -385,32 +449,21 @@ async function handleComment(cm: Comment, s: any, campaigns: any[]) {
     try { await fb('POST', `/${cm.commentId}/likes`, {}, s.page_token); await bump(c.id, 'liked'); }
     catch (e) { await fail('اللايك', e); }
   }
+  if (sendDm) {
+    await waitUntil(dmAt);
+    try {
+      const r = await sendPrivateReply(s.page_id, cm.commentId, dmText(dmText0, c), s.page_token);
+      await bump(c.id, 'messaged');
+      if (r?.recipient_id) await db.from('dm_sent').upsert({ psid: r.recipient_id, at: new Date().toISOString() });
+      await log('dm', `📩 رسالة ماسنجر اتبعتت لـ ${who}`);
+    } catch (e) { await fail('رسالة الماسنجر', e); }
+  }
   if (c.reply_enabled) {
-    const text = (await smart) || fill(pick(c.replies) || FALLBACK_REPLY, vars);
+    const text = (await smart) || fill(pick(c.replies) || interestReply(!!dmText0), { name: cm.fromName, page: s.page_name });
     if (text) {
       await waitUntil(replyAt);
       try { await fb('POST', `/${cm.commentId}/comments`, { message: text }, s.page_token); await bump(c.id, 'replied'); await log('reply', `✅ رد على ${who}: "${cut(text, 70)}"`); }
       catch (e) { await fail('الرد على التعليق', e); }
-    }
-  }
-  if (c.dm_enabled) {
-    const text = fill(pick(c.dm_messages), vars);
-    // رسالة ماسنجر واحدة لكل شخص في كل طلب (فيديو/منشور) — لو علّق على فيديو جديد بتوصله رسالة الفيديو الجديد
-    // حتى لو كلّمنا قبل كده على الماسنجر
-    let dmAllowed = true;
-    if (cm.fromId) {
-      const { error } = await db.from('user_hits').insert({ campaign_id: c.id, user_id: `dm:${cm.fromId}` });
-      if (error) { dmAllowed = false; await log('skip', `${who} أخد رسالة ماسنجر قبل كده — مش هتتبعتله تاني`); }
-    }
-    if (text && dmAllowed) {
-      await waitUntil(Math.max(replyAt, Date.now()) + rand(TIMING.dm));
-      try {
-        const parts = dmParts(text, s.page_id, c.button_title, c.button_url, c.follow_button !== false, s.return_to);
-        const r = await sendPrivateReply(s.page_id, cm.commentId, parts.text, s.page_token, parts.buttons, text);
-        await bump(c.id, 'messaged');
-        if (r?.recipient_id) await db.from('dm_sent').upsert({ psid: r.recipient_id, at: new Date().toISOString() });
-        await log('dm', `📩 رسالة ماسنجر اتبعتت لـ ${who}`);
-      } catch (e) { await fail('رسالة الماسنجر', e); }
     }
   }
 }
@@ -437,7 +490,7 @@ async function handleMessage(psid: string, text: string, s: any) {
     if (ct?.last_human && Date.now() - new Date(ct.last_human).getTime() < 30 * 60_000) return;
     try {
       const reply = await chatReply(psid, text, s);
-      if (reply) { await sleep(3000 + Math.random() * 5000); await send(reply); await log('dm', `🤖 رد ذكي على الماسنجر: "${cut(reply, 70)}"`); return; }
+      if (reply) { await sleep(800 + Math.random() * 1500); await send(reply); await log('dm', `🤖 رد ذكي على الماسنجر: "${cut(reply, 70)}"`); return; }
     } catch (e) { await log('error', `⚠️ الرد الذكي على الماسنجر: ${explain(e)}`); }
   }
   if (!s.dm_auto_enabled || !s.dm_auto_text) return;
@@ -479,7 +532,7 @@ async function chatReply(psid: string, text: string, s: any): Promise<string> {
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
   const user = `${history ? 'المحادثة اللي فاتت (الأقدم الأول):\n' + history + '\n\n' : ''}آخر رسالة منه: ${cut(text, 600)}`;
-  let out = await gemini(system, user, 900, 0.6);
+  let out = await gemini(system, user, 900, 0.6, 20_000);
   // لو الذكاء الاصطناعي مكنش عارف الإجابة بنعلّم السؤال في "النشاط" عشان ترد عليه بنفسك
   if (/\[\s*[؟?]\s*\]/.test(out)) {
     out = out.replace(/\[\s*[؟?]\s*\]/g, '').trim();
@@ -958,6 +1011,15 @@ async function api(req: Request, path: string): Promise<Response> {
     return json({ ok: true, sending: list.length, minutes: Math.ceil(list.length * 1.3 / 60) });
   }
   // دعم فني: آخر التعليقات اللي اتعالجت، وتجربة رسالة خاصة على تعليق معين عشان نشوف خطأ فيسبوك بالظبط
+  // دعم فني: الموديلات المتاحة على مفتاح Gemini + اللي حصته خلصانة
+  if (path === '/diag/ai' && method === 'GET') {
+    const out: any = { keys: aiKeys().length, cooldown: await getCool(), working: geminiModelOk };
+    try {
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': aiKeys()[0] || '' } }).then((r) => r.json());
+      out.models = (r.models || []).filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m: any) => m.name.replace('models/', ''));
+    } catch (e) { out.err = (e as Error).message; }
+    return json(out);
+  }
   if (path === '/diag/recent' && method === 'GET') {
     const { data } = await db.from('processed').select('comment_id,user_id,at').order('at', { ascending: false }).limit(10);
     return json({ recent: data || [] });

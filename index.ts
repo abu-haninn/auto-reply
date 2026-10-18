@@ -280,6 +280,20 @@ function guessGender(name: string): 'f' | 'm' | '' {
   return /^[؀-ۿa-z]+$/.test(first) ? 'm' : '';
 }
 const gw = (g: string, m: string, f: string) => (g === 'f' ? f : m);
+// تأكيد إن الكلام للبنت بالمؤنث (بعض الموديلات بتنسى) — بنصلح أشهر الكلمات
+const AR_L = '\\u0621-\\u065F\\u0670'; // حروف عربي بس (من غير الفاصلة وعلامة الاستفهام)
+const AR_END = '(?![' + AR_L + '])';
+const FEM_FIX: [RegExp, string][] = [
+  [new RegExp('(^|[^' + AR_L + '])(و?)إنت' + AR_END + '\\s+عامل' + AR_END, 'g'), '$1$2إنتي عاملة'],
+  [new RegExp('(^|[^' + AR_L + '])(و?)(إنت|انت)' + AR_END, 'g'), '$1$2إنتي'],
+  [new RegExp('منو[ّ]?ر' + AR_END, 'g'), 'منوّرة'],
+  [new RegExp('(^|[^' + AR_L + '])تسلم' + AR_END, 'g'), '$1تسلمي'],
+  [new RegExp('(يخلي|يسعد|يحفظ|علي|لي|بي|ل|ب|مع|عند)ك' + AR_END, 'g'), '$1كي'],
+  [new RegExp('(^|[^' + AR_L + '])(شوف|شيك|بص|ادخل|اتفضل|تابع|ابعت|جرب)' + AR_END, 'g'), '$1$2ي'],
+  [new RegExp('(^|[^' + AR_L + '])نورت' + AR_END, 'g'), '$1نورتي'],
+  [new RegExp('أؤمرني' + AR_END, 'g'), 'أؤمريني'],
+];
+const fem = (t: string, g: string) => (g === 'f' ? FEM_FIX.reduce((s, [re, to]) => s.replace(re, to), t) : t);
 
 const pickOne = (a: string[]) => a[Math.floor(Math.random() * a.length)];
 // رد احتياطي (لو الذكاء الاصطناعي مش متاح) — بيفهم أشهر أنواع التعليقات
@@ -328,7 +342,7 @@ async function generateSmart(comment: string, name: string, pageName: string, to
   ].filter(Boolean).join('\n');
   const user = `موضوع المنشور: ${cut(topic, 500) || 'غير معروف'}\nالتعليق: ${cut(comment, 400)}`;
   const text = (await gemini(system, user, 300, 0.7, 45_000)).replace(/https?:\/\/\S+/g, '').replace(/#\S+/g, '').replace(/\s+/g, ' ').trim();
-  return text.length >= 2 ? cut(text, 300) : '';
+  return text.length >= 2 ? cut(fem(text, g), 300) : '';
 }
 
 // =====================================================================
@@ -607,7 +621,7 @@ async function chatReply(psid: string, text: string, s: any, name = ''): Promise
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
   const user = `${history ? 'المحادثة اللي فاتت (الأقدم الأول):\n' + history + '\n\n' : ''}الرسايل الجديدة اللي محتاجة ردك:\n${pending.slice(-6).map((m) => '- ' + cut(m, 500)).join('\n')}`;
-  let out = await gemini(system, user, 900, 0.6, 50_000);
+  let out = fem(await gemini(system, user, 900, 0.6, 50_000), g);
   // لو الذكاء الاصطناعي مكنش عارف الإجابة بنعلّم السؤال في "النشاط" عشان ترد عليه بنفسك
   if (/\[\s*[؟?]\s*\]/.test(out)) {
     out = out.replace(/\[\s*[؟?]\s*\]/g, '').trim();

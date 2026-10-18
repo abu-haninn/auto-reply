@@ -346,23 +346,30 @@ async function generateSmart(comment: string, name: string, pageName: string, to
 }
 
 // =====================================================================
-//  نداء Gemini — سريع ومن غير تهنيج:
-//  - بنجرب أسرع موديل الأول، ولو حصته المجانية خلصت بنفتكر ده (في قاعدة البيانات) ومنجربهوش تاني لحد ما الحصة ترجع
-//  - بعد موديلات Gemini بنجرب موديلات Gemma (حصتها المجانية كبيرة جدًا)
-//  - تقدر تحط أكتر من مفتاح (GEMINI_API_KEY_2 و GEMINI_API_KEY_3) عشان الحصة تتضاعف
+//  الذكاء الاصطناعي — أكتر من خدمة، كل واحدة بحسابك الواحد وفي حدودها الطبيعية:
+//  1) Gemini (الأذكى)  2) Groq (سريع جدًا)  3) OpenRouter (موديلات مجانية)  4) Gemma (آخر احتياطي)
+//  لو موديل حصته خلصت بنفتكر ده (في قاعدة البيانات) ومنجربهوش تاني لحد ما الحصة ترجع — فمفيش تهنيج
 // =====================================================================
-// كل موديل ليه حصة مجانية لوحده — فبنلف عليهم: الأسرع الأول (lite) وبعدين flash وبعدين Gemma
-// الأذكى الأول (flash) وبعدين الأسرع (lite) وبعدين Gemma (حصتها كبيرة بس أبطأ)
-const AI_MODELS = [
+const GEMINI_MODELS = [
   'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3-flash-preview',
   'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite', 'gemini-3.1-flash-lite-preview',
-  'gemma-4-26b-a4b-it', 'gemma-4-31b-it',
 ];
-const aiKeys = () => [env('GEMINI_API_KEY'), env('GEMINI_API_KEY_2'), env('GEMINI_API_KEY_3')].flatMap((k) => String(k || '').split(',')).map((k) => k.trim()).filter(Boolean);
+const GEMMA_MODELS = ['gemma-4-26b-a4b-it', 'gemma-4-31b-it'];
+// خدمات بنفس طريقة OpenAI — الموديلات بتتجاب من الخدمة نفسها ونختار الأحسن للعربي
+const OAI = [
+  { name: 'groq', key: () => env('GROQ_API_KEY'), base: 'https://api.groq.com/openai/v1', free: false,
+    prefer: [/gpt-oss-120b/, /llama-3\.3-70b/, /llama-4-maverick/, /kimi-k2/, /qwen3-32b/, /llama-4-scout/],
+    skip: /whisper|guard|tts|playai|compound|embed|orpheus|prompt/i },
+  { name: 'openrouter', key: () => env('OPENROUTER_API_KEY'), base: 'https://openrouter.ai/api/v1', free: true,
+    prefer: [/deepseek-chat|deepseek-v3/, /gpt-oss-120b/, /llama-3\.3-70b/, /qwen3-235b|qwen3-32b/, /gemma-3-27b/, /mistral-small/],
+    skip: /vision|embed|coder|image/i },
+];
+const aiReady = () => !!(env('GEMINI_API_KEY') || env('GROQ_API_KEY') || env('OPENROUTER_API_KEY'));
+const aiKeys = () => [env('GEMINI_API_KEY')].filter(Boolean) as string[];
 // "retry in 11h51m17s" ← بالمللي ثانية
 function retryAfterMs(msg: string) {
-  const m = msg.match(/retry in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s/i);
-  if (!m) return /per ?day|daily|PerDay/i.test(msg) ? 6 * 3600_000 : 60_000;
+  const m = msg.match(/(?:retry|try again) in (?:(\d+)h)?(?:(\d+)m)?([\d.]+)s/i);
+  if (!m) return /per ?day|daily|PerDay|tokens per day|TPD|RPD/i.test(msg) ? 6 * 3600_000 : 60_000;
   return ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000 + 5_000;
 }
 let aiCool: Record<string, number> | null = null; // موديل ← لحد إمتى حصته خلصانة
@@ -381,53 +388,93 @@ async function setCool(id: string, ms: number) {
   for (const k of Object.keys(c)) if (c[k] < Date.now()) delete c[k];
   await db.from('settings').update({ ai_cooldown: c }).eq('id', 1).then(() => {}, () => {});
 }
+const oaiModels: Record<string, { at: number; list: string[] }> = {};
+async function modelsOf(p: typeof OAI[number]) {
+  const c = oaiModels[p.name];
+  if (c && Date.now() - c.at < 6 * 3600_000) return c.list;
+  let ids: string[] = [];
+  try {
+    const r = await fetch(`${p.base}/models`, { headers: { Authorization: `Bearer ${p.key()}` }, signal: AbortSignal.timeout(8_000) }).then((r) => r.json());
+    ids = (r.data || []).map((m: any) => String(m.id)).filter((id: string) => !p.skip.test(id) && (!p.free || id.endsWith(':free')));
+  } catch { /* */ }
+  const ranked = [...new Set(p.prefer.flatMap((re) => ids.filter((id) => re.test(id))))];
+  const list = (ranked.length ? ranked : ids).slice(0, 4);
+  oaiModels[p.name] = { at: Date.now(), list };
+  return list;
+}
+const clean = (t: string) => t.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^["'«“]+|["'»”]+$/g, '').trim();
+
+type Attempt = { id: string; label: string; slow?: boolean; run: (signal: AbortSignal) => Promise<Response> };
 async function gemini(system: string, user: string, maxChars = 300, temperature = 0.7, budgetMs = 25_000): Promise<string> {
-  const keys = aiKeys();
-  if (!keys.length) throw new Error('مفتاح GEMINI_API_KEY مش موجود');
+  if (!aiReady()) throw new Error('مفيش مفتاح ذكاء اصطناعي');
   const cool = await getCool();
-  const models = [...new Set([geminiModelOk, env('GEMINI_MODEL'), ...AI_MODELS].filter(Boolean))] as string[];
+  const gKey = env('GEMINI_API_KEY');
+  const geminiCall = (model: string): Attempt => {
+    const gemma = model.startsWith('gemma');
+    return {
+      id: `0:${model}`, label: model, slow: gemma,
+      run: (signal) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST', signal,
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': gKey! },
+        body: JSON.stringify({
+          // Gemma مش بيقبل تعليمات نظام منفصلة — بنحطها في أول الرسالة
+          ...(gemma ? {} : { systemInstruction: { parts: [{ text: system }] } }),
+          contents: [{ role: 'user', parts: [{ text: gemma ? `${system}\n\n----\n${user}` : user }] }],
+          generationConfig: { temperature, maxOutputTokens: 800 },
+        }),
+      }),
+    };
+  };
+  const attempts: Attempt[] = [];
+  if (gKey) attempts.push(...GEMINI_MODELS.map(geminiCall));
+  for (const p of OAI) {
+    if (!p.key()) continue;
+    for (const model of await modelsOf(p)) {
+      attempts.push({
+        id: `${p.name}:${model}`, label: `${p.name}/${model}`,
+        run: (signal) => fetch(`${p.base}/chat/completions`, {
+          method: 'POST', signal,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${p.key()}` },
+          body: JSON.stringify({ model, temperature, max_tokens: 800, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
+        }),
+      });
+    }
+  }
+  if (gKey) attempts.push(...GEMMA_MODELS.map(geminiCall));
+  // اللي اشتغل آخر مرة يتجرب الأول
+  const okIdx = attempts.findIndex((a) => a.label === geminiModelOk);
+  if (okIdx > 0) attempts.unshift(...attempts.splice(okIdx, 1));
+
   const deadline = Date.now() + budgetMs;
   let lastErr = '';
   for (let round = 0; round < 2; round++) {
     let busy = false;
-    for (const [ki, key] of keys.entries()) {
-      for (const model of models) {
-        const id = `${ki}:${model}`;
-        if ((cool[id] || 0) > Date.now()) continue; // حصته خالصة — منضيعش وقت
-        if (Date.now() > deadline) throw new Error(lastErr || 'الذكاء الاصطناعي اتأخر');
-        const gemma = model.startsWith('gemma');
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-          body: JSON.stringify({
-            // Gemma مش بيقبل تعليمات نظام منفصلة — بنحطها في أول الرسالة
-            ...(gemma ? {} : { systemInstruction: { parts: [{ text: system }] } }),
-            contents: [{ role: 'user', parts: [{ text: gemma ? `${system}\n\n----\n${user}` : user }] }],
-            generationConfig: { temperature, maxOutputTokens: 800 },
-          }),
-          // Gemma أبطأ شوية فبنديله وقت أطول
-          signal: AbortSignal.timeout(Math.min(gemma ? 30_000 : 15_000, Math.max(3_000, deadline - Date.now()))),
-        }).catch((e) => { lastErr = (e as Error).message; busy = true; return null; });
-        if (!res) continue;
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          lastErr = data?.error?.message || `HTTP ${res.status}`;
-          if (res.status === 429 || /quota|rate limit|exhausted/i.test(lastErr)) { await setCool(id, retryAfterMs(lastErr)); continue; }
-          if (res.status === 404 || /no longer available|not found|not supported|deprecated/i.test(lastErr)) { await setCool(id, 24 * 3600_000); continue; }
-          if (res.status >= 500 || /high demand|overloaded|unavailable/i.test(lastErr)) { busy = true; continue; }
-          if (res.status === 400 && /API key|API_KEY/i.test(lastErr)) break; // المفتاح ده نفسه فيه مشكلة ← المفتاح اللي بعده
-          await setCool(id, 3600_000); continue;
-        }
-        const text = (data.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('').trim();
-        if (!text) { lastErr = 'رد فاضي'; continue; }
-        geminiModelOk = model;
-        return cut(text.replace(/^["'«“]+|["'»”]+$/g, '').trim(), maxChars);
+    for (const a of attempts) {
+      if ((cool[a.id] || 0) > Date.now()) continue; // حصته خالصة — منضيعش وقت
+      if (Date.now() > deadline) throw new Error(lastErr || 'الذكاء الاصطناعي اتأخر');
+      const signal = AbortSignal.timeout(Math.min(a.slow ? 30_000 : 15_000, Math.max(3_000, deadline - Date.now())));
+      const res = await a.run(signal).catch((e) => { lastErr = (e as Error).message; busy = true; return null; });
+      if (!res) continue;
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        lastErr = data?.error?.message || data?.message || `HTTP ${res.status}`;
+        const wait = Number(res.headers.get('retry-after')) * 1000;
+        if (res.status === 429 || /quota|rate limit|exhausted/i.test(lastErr)) { await setCool(a.id, wait > 0 ? wait + 2_000 : retryAfterMs(lastErr)); continue; }
+        if (res.status === 404 || /no longer available|not found|not supported|deprecated|does not exist|decommissioned/i.test(lastErr)) { await setCool(a.id, 24 * 3600_000); continue; }
+        if (res.status >= 500 || /high demand|overloaded|unavailable/i.test(lastErr)) { busy = true; continue; }
+        await setCool(a.id, res.status === 401 || res.status === 403 ? 6 * 3600_000 : 3600_000); continue;
       }
+      const text = clean(data.choices
+        ? String(data.choices?.[0]?.message?.content || '')
+        : (data.candidates?.[0]?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join(''));
+      if (!text) { lastErr = 'رد فاضي'; continue; }
+      geminiModelOk = a.label;
+      return cut(text, maxChars);
     }
     if (!busy) break; // كله حصته خالصة — مفيش فايدة نستنى
     await sleep(1500);
   }
-  throw new Error(/quota|exhausted/i.test(lastErr) || !lastErr ? 'حصة الذكاء الاصطناعي المجانية خلصت النهارده' : lastErr);
+  throw new Error(/quota|exhausted|rate limit/i.test(lastErr) || !lastErr ? 'حصة الذكاء الاصطناعي المجانية خلصت النهارده' : lastErr);
 }
 let geminiModelOk = '';
 
@@ -533,7 +580,7 @@ async function handleMessage(psid: string, text: string, s: any, at = 0) {
   // 1) بيستنى شوية يشوف لو الشخص هيبعت رسايل تانية ورا بعض (ازيك + عامل ايه + سؤال…)
   // 2) لو جت رسالة أحدث، المعالجة دي بتقف والأحدث هي اللي بترد على كله في رسالة واحدة
   // 3) بيظهر "بيكتب…" وياخد وقت على قد طول الرد، وبعدين يبعت
-  if (s.dm_ai_enabled && aiKeys().length && text.trim()) {
+  if (s.dm_ai_enabled && aiReady() && text.trim()) {
     await sleep(rand(TIMING.chatWait));
     const { data: ct } = await db.from('contacts').select('last_in,last_human').eq('psid', psid).maybeSingle();
     // لو إنت رديت بنفسك على الشخص ده آخر 30 دقيقة البوت بيسكت ويسيبك تكمل
@@ -929,7 +976,7 @@ async function api(req: Request, path: string): Promise<Response> {
       page: cur ? safePageRow(cur) : null,
       pages: pages.map(safePageRow),
       dmFollowButton: s.dm_follow_button !== false,
-      aiReady: !!env('GEMINI_API_KEY'),
+      aiReady: aiReady(),
       totals: { comments: sum('matched'), replies: sum('replied'), messages: sum('messaged'), likes: sum('liked'), errors: sum('errors'), active: (camps || []).filter((c: any) => c.active).length },
       lastPoll: s.last_poll, lastWebhook: s.last_webhook, cronReady: s.cron_url === FN_URL + '/cron',
       setup: {
@@ -1103,7 +1150,8 @@ async function api(req: Request, path: string): Promise<Response> {
   // دعم فني: آخر التعليقات اللي اتعالجت، وتجربة رسالة خاصة على تعليق معين عشان نشوف خطأ فيسبوك بالظبط
   // دعم فني: الموديلات المتاحة على مفتاح Gemini + اللي حصته خلصانة
   if (path === '/diag/ai' && method === 'GET') {
-    const out: any = { keys: aiKeys().length, cooldown: await getCool(), working: geminiModelOk };
+    const out: any = { gemini: !!env('GEMINI_API_KEY'), groq: !!env('GROQ_API_KEY'), openrouter: !!env('OPENROUTER_API_KEY'), cooldown: await getCool(), working: geminiModelOk };
+    for (const p of OAI) if (p.key()) out[p.name + 'Models'] = await modelsOf(p);
     try {
       const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers: { 'x-goog-api-key': aiKeys()[0] || '' } }).then((r) => r.json());
       out.models = (r.models || []).filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m: any) => m.name.replace('models/', ''));

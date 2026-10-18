@@ -289,7 +289,8 @@ const FEM_FIX: [RegExp, string][] = [
   [new RegExp('منو[ّ]?ر' + AR_END, 'g'), 'منوّرة'],
   [new RegExp('(^|[^' + AR_L + '])تسلم' + AR_END, 'g'), '$1تسلمي'],
   [new RegExp('(يخلي|يسعد|يحفظ|علي|لي|بي|ل|ب|مع|عند)ك' + AR_END, 'g'), '$1كي'],
-  [new RegExp('(^|[^' + AR_L + '])(شوف|شيك|بص|ادخل|اتفضل|تابع|ابعت|جرب)' + AR_END, 'g'), '$1$2ي'],
+  [new RegExp('(^|[^' + AR_L + '])(شوف|شيك|بص|ادخل|اتفضل|تابع|ابعت|جرب|تقدر|تحب|تعرف|تكتب|تبعت|تدخل)' + AR_END, 'g'), '$1$2ي'],
+  [new RegExp('(^|[^' + AR_L + '])(عايز|عاوز|محتاج|متأكد|مهتم)' + AR_END, 'g'), '$1$2ة'],
   [new RegExp('(^|[^' + AR_L + '])نورت' + AR_END, 'g'), '$1نورتي'],
   [new RegExp('أؤمرني' + AR_END, 'g'), 'أؤمريني'],
 ];
@@ -336,7 +337,7 @@ async function generateSmart(comment: string, name: string, pageName: string, to
     dmSent
       ? 'الشخص وصلته رسالة على الماسنجر فيها كل التفاصيل والروابط. لو طلب رابط/تفاصيل/مهتم قوله إنك بعتهاله على الخاص. لو كلامه مالوش علاقة (سلام، شكر، دعاء) متجيبش سيرة الخاص.'
       : 'متقولش إنك هتبعت حاجة على الخاص.',
-    about ? `معلومات عنك (عشان تفهم وترد صح — متكتبش أرقام أو روابط في التعليقات؛ اللي عايز رقم/إعلان/تعاون قوله يكلمك على الماسنجر):\n${cut(about, 2000)}` : '',
+    about ? `معلومات عنك (عشان تفهم وترد صح — متكتبش أرقام أو روابط في التعليقات؛ اللي عايز رقم/إعلان/تعاون قوله يكلمك على الماسنجر):\n${cut(about, 1200)}` : '',
     'ممنوع: روابط، أرقام تليفونات، هاشتاجات، أكتر من إيموجي واحد، علامات تنصيص، أو إنك تقول من نفسك إنك بوت. لو فيه إساءة رد بأدب وهدوء.',
     'اكتب الرد نفسه بس.',
   ].filter(Boolean).join('\n');
@@ -361,8 +362,8 @@ const OAI = [
     prefer: [/gpt-oss-120b/, /llama-3\.3-70b/, /llama-4-maverick/, /kimi-k2/, /qwen3-32b/, /llama-4-scout/],
     skip: /whisper|guard|tts|playai|compound|embed|orpheus|prompt/i },
   { name: 'openrouter', key: () => env('OPENROUTER_API_KEY'), base: 'https://openrouter.ai/api/v1', free: true,
-    prefer: [/deepseek-chat|deepseek-v3/, /gpt-oss-120b/, /llama-3\.3-70b/, /qwen3-235b|qwen3-32b/, /gemma-3-27b/, /mistral-small/],
-    skip: /vision|embed|coder|image/i },
+    prefer: [/deepseek-chat|deepseek-v3/, /gpt-oss-120b/, /nemotron.*super/, /llama-3\.3-70b|llama-4-maverick/, /qwen3-235b|qwen3-32b/, /gemma-3-27b/, /mistral-small/],
+    skip: /vision|embed|coder|image|(^|[^\d.])[1-9](\.\d)?b\b|mini|nano|tiny/i },
 ];
 const aiReady = () => !!(env('GEMINI_API_KEY') || env('GROQ_API_KEY') || env('OPENROUTER_API_KEY'));
 const aiKeys = () => [env('GEMINI_API_KEY')].filter(Boolean) as string[];
@@ -398,7 +399,8 @@ async function modelsOf(p: typeof OAI[number]) {
     ids = (r.data || []).map((m: any) => String(m.id)).filter((id: string) => !p.skip.test(id) && (!p.free || id.endsWith(':free')));
   } catch { /* */ }
   const ranked = [...new Set(p.prefer.flatMap((re) => ids.filter((id) => re.test(id))))];
-  const list = (ranked.length ? ranked : ids).slice(0, 4);
+  // الأحسن الأول وبعدين الباقي — كل موديل ليه حد في الدقيقة لوحده فبنوزع الضغط عليهم
+  const list = [...ranked, ...ids.filter((id) => !ranked.includes(id))].slice(0, p.free ? 4 : 6);
   oaiModels[p.name] = { at: Date.now(), list };
   return list;
 }

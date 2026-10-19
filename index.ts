@@ -488,7 +488,7 @@ const TIMING = {
   like:  [3_000, 8_000],   // اللايك بعد 3-8 ثواني من التعليق
   reply: [6_000, 14_000],  // الرد على التعليق بعد اللايك بـ 6-14 ثانية
   dm:    [5_000, 12_000],  // رسالة الماسنجر بعد الرد بـ 5-12 ثانية
-  chatWait: [12_000, 20_000], // الماسنجر: بنستنى 12-20 ثانية لو الشخص هيبعت كذا رسالة ورا بعض
+  chatWait: [25_000, 30_000], // الماسنجر: بنستنى 25-30 ثانية من آخر رسالة لو الشخص هيبعت كذا رسالة ورا بعض
 };
 const rand = ([a, b]: number[]) => a + Math.random() * (b - a);
 const waitUntil = (t: number) => sleep(Math.max(0, Math.min(t - Date.now(), 90_000)));
@@ -583,11 +583,15 @@ async function handleMessage(psid: string, text: string, s: any, at = 0) {
   // 2) لو جت رسالة أحدث، المعالجة دي بتقف والأحدث هي اللي بترد على كله في رسالة واحدة
   // 3) بيظهر "بيكتب…" وياخد وقت على قد طول الرد، وبعدين يبعت
   if (s.dm_ai_enabled && aiReady() && text.trim()) {
+    // بنستنى لحد ما الشخص يسكت شوية (كل رسالة جديدة بتبدأ العد من الأول) — وبعدين رد واحد بس على كله
+    const newer = async () => {
+      const { data: ct } = await db.from('contacts').select('last_in,last_human').eq('psid', psid).maybeSingle();
+      // لو إنت رديت بنفسك على الشخص ده آخر 30 دقيقة البوت بيسكت ويسيبك تكمل
+      if (ct?.last_human && Date.now() - new Date(ct.last_human).getTime() < 30 * 60_000) return true;
+      return !!(at && ct?.last_in && new Date(ct.last_in).getTime() > at); // فيه رسالة أحدث — هي اللي هترد على كله
+    };
     await sleep(rand(TIMING.chatWait));
-    const { data: ct } = await db.from('contacts').select('last_in,last_human').eq('psid', psid).maybeSingle();
-    // لو إنت رديت بنفسك على الشخص ده آخر 30 دقيقة البوت بيسكت ويسيبك تكمل
-    if (ct?.last_human && Date.now() - new Date(ct.last_human).getTime() < 30 * 60_000) return;
-    if (at && ct?.last_in && new Date(ct.last_in).getTime() > at) return; // فيه رسالة أحدث — هي اللي هترد
+    if (await newer()) return;
     const typing = () => fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, sender_action: 'typing_on' }, s.page_token).catch(() => {});
     await fb('POST', `/${s.page_id}/messages`, { recipient: { id: psid }, sender_action: 'mark_seen' }, s.page_token).catch(() => {});
     await sleep(1500 + Math.random() * 2000);
@@ -600,6 +604,7 @@ async function handleMessage(psid: string, text: string, s: any, at = 0) {
         const typeMs = Math.min(14_000, 2_500 + reply.length * 45);
         const left = typeMs - (Date.now() - t0);
         if (left > 0) { await typing(); await sleep(left); }
+        if (await newer()) return; // الشخص بعت رسالة جديدة وإحنا بنكتب ← الرد الجاي هيغطي كله في رسالة واحدة
         await send(reply);
         await log('dm', `🤖 رد ذكي على الماسنجر: "${cut(reply, 70)}"`);
         return;
@@ -611,6 +616,7 @@ async function handleMessage(psid: string, text: string, s: any, at = 0) {
     // الذكاء الاصطناعي مش متاح دلوقتي ← رد ذوق (مرة واحدة كل كام ساعة للشخص) بدل ما يتساب من غير رد
     const { data: last } = await db.from('dm_sent').select('at').eq('psid', psid).maybeSingle();
     if (last && Date.now() - new Date(last.at).getTime() < 6 * 3600_000) return;
+    if (await newer()) return;
     const g = guessGender(await nameOf());
     const fallback = s.dm_auto_enabled && s.dm_auto_text ? fill(s.dm_auto_text, { name: await nameOf(), page: s.page_name })
       : `أهلًا ${gw(g, 'بيك', 'بيكي')} ❤️ وصلتني رسالتك، وهرد ${gw(g, 'عليك', 'عليكي')} بنفسي في أقرب وقت 🙏`;
@@ -648,14 +654,16 @@ async function chatReply(psid: string, text: string, s: any, name = ''): Promise
     }).join('\n');
   const system = [
     `إنت "${s.page_name}" (أبو حنين) بنفسك، بترد على رسايل الماسنجر من موبايلك زي أي إنسان.`,
-    'الشخص ممكن يكون بعت كذا رسالة ورا بعض — اقراهم كلهم وافهم هو عايز إيه، ورد على كله في رسالة واحدة طبيعية (مش نقط مرقمة).',
+    'الشخص ممكن يكون بعت كذا رسالة ورا بعض — اقراهم كلهم وافهم هو عايز إيه، ورد على كله في رسالة واحدة قصيرة (مش نقط مرقمة).',
+    'أهم قاعدة: الرد قصير جدًا وعلى قد السؤال بالظبط — من 3 لـ 25 كلمة. ممنوع المقدمات والشرح الزيادة والكلام المكرر واللي محدش سأل عنه. لو السؤال بسيط رد في جملة واحدة.',
+    'لو بعت سلام + سؤال: رد السلام في كلمتين وجاوب السؤال على طول (مثلًا: "وعليكم السلام ❤️ اتفضل 👇" والرابط).',
     'المقاس: على قد الكلام بالظبط. أمثلة:',
     '- "صلي على النبي" ← "عليه أفضل الصلاة والسلام ❤️"',
     '- "ازيك" + "عامل ايه" ← "الحمد لله بخير، وإنت عامل إيه؟ أؤمرني"',
     '- "السلام عليكم" ← "وعليكم السلام ورحمة الله، أؤمرني"',
     '- "ممكن رابط الموقع الفلاني" ← "اتفضل 👇" وتحته الرابط',
     '- "شكرا" ← "العفو ❤️"',
-    '- سؤال ← الإجابة نفسها مباشرة من غير مقدمات، في جملة لتلاتة بالكتير.',
+    '- سؤال ← الإجابة نفسها مباشرة من غير مقدمات، في جملة واحدة (اتنين بالكتير لو لازم).',
     '- طلب رابط/فيديو/شرح حاجة من الحاجات اللي تحت ← الرابط الصح زي ما هو بالظبط وسطر قصير. لو مش واضح يقصد أنهي واحد اسأله سؤال واحد قصير.',
     '- شكوى/مشكلة ← اعتذر بلطف واسأله عن التفاصيل.',
     'متكررش كلام أو تحية اتقالت قبل كده في المحادثة، ومتبعتش نفس الرابط تاني إلا لو طلبه.',
@@ -670,7 +678,7 @@ async function chatReply(psid: string, text: string, s: any, name = ''): Promise
     'اكتب الرد نفسه بس من غير أي مقدمة أو علامات تنصيص.',
   ].filter(Boolean).join('\n');
   const user = `${history ? 'المحادثة اللي فاتت (الأقدم الأول):\n' + history + '\n\n' : ''}الرسايل الجديدة اللي محتاجة ردك:\n${pending.slice(-6).map((m) => '- ' + cut(m, 500)).join('\n')}`;
-  let out = fem(await gemini(system, user, 900, 0.6, 50_000), g);
+  let out = fem(await gemini(system, user, 500, 0.5, 50_000), g);
   // لو الذكاء الاصطناعي مكنش عارف الإجابة بنعلّم السؤال في "النشاط" عشان ترد عليه بنفسك
   if (/\[\s*[؟?]\s*\]/.test(out)) {
     out = out.replace(/\[\s*[؟?]\s*\]/g, '').trim();

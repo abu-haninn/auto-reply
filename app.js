@@ -101,33 +101,12 @@ async function loadStats() {
   const by = Object.fromEntries(days.map((d) => [d, { comment: 0, reply: 0, dm: 0, ai: 0 }]));
   for (const r of STATS) { const d = String(r.day).slice(0, 10); if (by[d]) by[d][r.kind] = Number(r.n) || 0; }
   const tot = (d) => by[d].reply + by[d].dm + by[d].ai;
-  const max = Math.max(1, ...days.map(tot));
   const today = days[6];
-  const fmtDay = (d) => (d === today ? 'النهارده' : new Date(d + 'T12:00:00').toLocaleDateString('ar-EG', { weekday: 'short' }));
-  $('#chart').innerHTML = days.map((d) => {
-    const v = tot(d), showV = d === today || v === max;
-    return `<div class="col ${d === today ? 'today' : ''}" data-d="${d}" aria-label="${fmtDay(d)}: ${v}">
-      ${showV && v ? `<span class="v">${num(v)}</span>` : ''}<div class="bar" style="height:${Math.round((v / max) * 100)}%"></div><span class="d">${fmtDay(d)}</span></div>`;
-  }).join('');
   const t = by[today];
   const delta = (id, n) => { $(id).textContent = n ? `+${num(n)} النهارده` : ''; };
   delta('#dComments', t.comment); delta('#dReplies', t.reply); delta('#dMessages', t.dm);
   $('#sToday').textContent = tot(today) ? `منهم ${num(tot(today))} النهارده` : 'رد ورسالة — من غير ما تلمس الموبايل';
   countTo($('#sAi'), days.reduce((a, d) => a + by[d].ai, 0));
-  // تفاصيل اليوم لما تقف عليه أو تدوس
-  const tip = $('#chTip');
-  $$('#chart .col').forEach((col) => {
-    const show = () => {
-      const d = by[col.dataset.d];
-      tip.innerHTML = `<b>${fmtDay(col.dataset.d)} — ${new Date(col.dataset.d + 'T12:00:00').toLocaleDateString('ar-EG', { day: 'numeric', month: 'long' })}</b>
-        <span>تعليقات <i>${num(d.comment)}</i></span><span>ردود <i>${num(d.reply)}</i></span><span>رسائل ماسنجر <i>${num(d.dm)}</i></span><span>ردود ذكية <i>${num(d.ai)}</i></span>`;
-      tip.classList.remove('hidden');
-      const box = $('.chart-box').getBoundingClientRect(), r = col.getBoundingClientRect();
-      tip.style.left = Math.max(8, Math.min(box.width - tip.offsetWidth - 8, r.left - box.left + r.width / 2 - tip.offsetWidth / 2)) + 'px';
-    };
-    col.onmouseenter = show; col.onclick = show;
-    col.onmouseleave = () => tip.classList.add('hidden');
-  });
 }
 async function busy(btn, fn) {
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';

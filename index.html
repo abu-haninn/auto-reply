@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
@@ -79,14 +79,26 @@
         <div class="page-switch hidden" id="pageSwitch"></div>
         <div class="dash">
           <div class="dash-h">
-            <div><small>اتبعت لحد دلوقتي</small><b id="sTotal">0</b><span class="dash-sub">رد ورسالة — من غير ما تلمس الموبايل</span></div>
+            <div><small>إجمالي اللي البوت عمله</small><b id="sTotal">0</b><span class="dash-sub" id="sToday">رد ورسالة</span></div>
             <span class="dash-live"><span class="pulse"></span>مباشر</span>
           </div>
           <div class="dash-grid">
-            <div class="tile t-y"><span class="ti"><i data-i="msg"></i></span><b id="sComments">0</b><small>تعليق اتلقط</small></div>
-            <div class="tile t-g"><span class="ti"><i data-i="reply"></i></span><b id="sReplies">0</b><small>رد على تعليق</small></div>
-            <div class="tile t-b"><span class="ti"><i data-i="chat"></i></span><b id="sMessages">0</b><small>رسالة ماسنجر</small></div>
+            <div class="tile t-y"><span class="ti"><i data-i="msg"></i></span><b id="sComments">0</b><small>تعليق اتلقط</small><em class="delta" id="dComments"></em></div>
+            <div class="tile t-g"><span class="ti"><i data-i="reply"></i></span><b id="sReplies">0</b><small>رد على تعليق</small><em class="delta" id="dReplies"></em></div>
+            <div class="tile t-b"><span class="ti"><i data-i="chat"></i></span><b id="sMessages">0</b><small>رسالة ماسنجر</small><em class="delta" id="dMessages"></em></div>
           </div>
+          <div class="minis">
+            <div><small>نسبة الرد</small><b id="sRate">0%</b></div>
+            <div><small>لايكات</small><b id="sLikes">0</b></div>
+            <div><small>ردود ذكية (7 أيام)</small><b id="sAi">0</b></div>
+            <div><small>طلبات شغالة</small><b id="sActive">0</b></div>
+          </div>
+          <div class="chart-box">
+            <div class="ch-h"><b>النشاط آخر 7 أيام</b><small>ردود + رسائل كل يوم</small></div>
+            <div class="chart" id="chart" role="img" aria-label="النشاط آخر 7 أيام"></div>
+            <div class="ch-tip hidden" id="chTip"></div>
+          </div>
+          <div class="top-reqs" id="topReqs"></div>
         </div>
         <button class="btn btn-y btn-lg btn-full" id="newBtn"><i data-i="plus"></i>طلب جديد</button>
         <div id="reqList" class="mt"></div>
@@ -224,6 +236,6 @@
 
 <div class="toast-box" id="toasts"></div>
 <script src="config.js"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

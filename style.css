@@ -126,6 +126,43 @@ nav.tabs button.on { color: var(--yellow); background: var(--surface); border-co
 .t-y .ti { background: var(--yellow-soft); color: var(--yellow); }
 .t-g .ti { background: var(--green-soft); color: var(--green); }
 .t-b .ti { background: var(--blue-soft); color: var(--blue); }
+.tile { position: relative; }
+.tile .delta { position: absolute; top: 12px; left: 12px; font-style: normal; font-size: 11.5px; font-weight: 700; color: var(--green);
+  background: var(--green-soft); padding: 1px 8px; border-radius: 99px; }
+.tile .delta:empty { display: none; }
+.minis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 10px; position: relative;
+  border: 1px solid var(--border); border-radius: 16px; background: rgba(255, 255, 255, .02); }
+.minis div { padding: 10px 12px; text-align: center; }
+.minis div + div { border-right: 1px solid var(--border); }
+.minis small { display: block; color: var(--muted); font-size: 11.5px; font-weight: 500; }
+.minis b { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+/* رسم النشاط */
+.chart-box { margin-top: 12px; position: relative; border: 1px solid var(--border); border-radius: 16px; padding: 14px 14px 10px; background: rgba(255, 255, 255, .02); }
+.ch-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ch-h b { font-size: 14px; }
+.ch-h small { color: var(--faint); font-size: 12px; }
+.chart { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; height: 150px; margin-top: 12px; position: relative;
+  background: repeating-linear-gradient(to top, transparent 0 calc(33.33% - 1px), rgba(255, 255, 255, .05) calc(33.33% - 1px) 33.33%); }
+.chart .col { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; cursor: pointer; padding-bottom: 20px; position: relative; }
+.chart .bar { width: min(26px, 70%); background: rgba(252, 213, 53, .45); border-radius: 4px 4px 0 0; min-height: 2px; transition: background .2s, height .5s cubic-bezier(.2, .9, .2, 1); }
+.chart .col.today .bar, .chart .col:hover .bar { background: var(--yellow); }
+.chart .v { font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.chart .d { position: absolute; bottom: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.chart .col.today .d { color: var(--yellow); font-weight: 700; }
+.ch-tip { position: absolute; top: 40px; z-index: 5; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 12px;
+  padding: 8px 12px; font-size: 12.5px; line-height: 1.7; box-shadow: 0 10px 30px rgba(0, 0, 0, .4); pointer-events: none; min-width: 150px; }
+.ch-tip b { display: block; font-size: 13px; }
+.ch-tip span { display: flex; justify-content: space-between; gap: 14px; color: var(--muted); }
+.ch-tip span i { font-style: normal; color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+/* أنشط الطلبات */
+.top-reqs { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.top-reqs:empty { display: none; }
+.top-reqs .h { color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; font-size: 13px; }
+.tr span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr b { font-variant-numeric: tabular-nums; font-size: 13px; }
+.tr i { grid-column: 1 / -1; height: 4px; border-radius: 4px; background: var(--surface-3); overflow: hidden; display: block; }
+.tr i::after { content: ''; display: block; height: 100%; width: var(--w); background: var(--yellow); border-radius: 4px; }
 .tile.bump { animation: tile-bump 1.4s ease; }
 @keyframes tile-bump { 0% { border-color: var(--green); box-shadow: 0 0 0 4px var(--green-soft); transform: translateY(-2px); } 100% { border-color: var(--border); box-shadow: none; transform: none; } }
 
@@ -323,6 +360,11 @@ details.more summary::-webkit-details-marker { display: none; }
   .tile b { font-size: 19px; }
   .tile small { font-size: 11px; }
   .tile .ti { width: 30px; height: 30px; }
+  .tile .delta { top: 10px; left: 8px; font-size: 10.5px; padding: 0 6px; }
+  .minis { grid-template-columns: repeat(2, 1fr); }
+  .minis div:nth-child(3) { border-right: 0; }
+  .minis div:nth-child(n+3) { border-top: 1px solid var(--border); }
+  .chart { gap: 4px; height: 130px; }
   .card { padding: 16px; }
   .sheet { max-height: 96vh; }
 }

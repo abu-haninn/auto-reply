@@ -1140,6 +1140,13 @@ async function api(req: Request, path: string): Promise<Response> {
     const { count: queued } = await db.from('outbox').select('id', { count: 'exact', head: true }).is('claimed_at', null);
     return json({ count: (await eligibleContacts(cur.id)).length, queued: queued || 0 });
   }
+  // ---- إحصائيات آخر أيام (من سجل النشاط) ----
+  if (path === '/stats' && method === 'GET') {
+    const days = Math.min(14, Math.max(1, Number(new URL(req.url).searchParams.get('days')) || 7));
+    const { data, error } = await db.rpc('stats_daily', { days });
+    if (error) return json({ days: [], error: error.message });
+    return json({ days: data || [] });
+  }
   if (path === '/broadcast' && method === 'POST') {
     if (!cur) return json({ error: 'اربط صفحة الأول' }, 400);
     const msg = cut(String(body.text || '').trim(), 2000);

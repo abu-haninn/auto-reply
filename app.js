@@ -79,18 +79,7 @@ function countTo(el, to) {
   requestAnimationFrame(step);
 }
 function setStats(c, r, m) {
-  countTo($('#sComments'), c); countTo($('#sReplies'), r); countTo($('#sMessages'), m); countTo($('#sTotal'), r + m);
-  $('#sRate').textContent = c ? `${Math.min(100, Math.round((r / c) * 100))}%` : '—';
-}
-// أرقام إضافية + أنشط الطلبات (من الطلبات نفسها)
-function renderReqStats() {
-  const sum = (k) => REQS.reduce((a, c) => a + (c[k] || 0), 0);
-  countTo($('#sLikes'), sum('liked'));
-  $('#sActive').textContent = num(REQS.filter((c) => c.active).length);
-  const top = [...REQS].sort((a, b) => (b.matched || 0) - (a.matched || 0)).filter((c) => c.matched).slice(0, 3);
-  const max = top[0] ? top[0].matched : 1;
-  $('#topReqs').innerHTML = top.length ? `<div class="h">أنشط الطلبات</div>` + top.map((c) =>
-    `<div class="tr"><span>${esc(c.name)}</span><b>${num(c.matched)} تعليق</b><i style="--w:${Math.max(3, Math.round((c.matched / max) * 100))}%"></i></div>`).join('') : '';
+  countTo($('#sComments'), c); countTo($('#sReplies'), r); countTo($('#sMessages'), m);
 }
 // النشاط آخر 7 أيام (بتوقيت القاهرة)
 const cairoDay = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(d);
@@ -100,13 +89,10 @@ async function loadStats() {
   const days = [...Array(7)].map((_, i) => cairoDay(new Date(Date.now() - (6 - i) * 86400_000)));
   const by = Object.fromEntries(days.map((d) => [d, { comment: 0, reply: 0, dm: 0, ai: 0 }]));
   for (const r of STATS) { const d = String(r.day).slice(0, 10); if (by[d]) by[d][r.kind] = Number(r.n) || 0; }
-  const tot = (d) => by[d].reply + by[d].dm + by[d].ai;
   const today = days[6];
   const t = by[today];
   const delta = (id, n) => { $(id).textContent = n ? `+${num(n)} النهارده` : ''; };
   delta('#dComments', t.comment); delta('#dReplies', t.reply); delta('#dMessages', t.dm);
-  $('#sToday').textContent = tot(today) ? `منهم ${num(tot(today))} النهارده` : 'رد ورسالة — من غير ما تلمس الموبايل';
-  countTo($('#sAi'), days.reduce((a, d) => a + by[d].ai, 0));
 }
 async function busy(btn, fn) {
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
@@ -204,7 +190,6 @@ async function loadRequests() {
   const box = $('#reqList');
   if (!REQS.length) {
     box.innerHTML = `<div class="card empty"><div class="ic">${icon('rocket')}</div><h2>اعمل أول طلب</h2><p>اختار الفيديو، اكتب الكلمة زي "مهتم"، واكتب الرد ورسالة الماسنجر — والباقي علينا.</p></div>`;
-    renderReqStats();
     return;
   }
   box.innerHTML = REQS.map((c) => {
@@ -227,7 +212,6 @@ async function loadRequests() {
     </div>`;
   }).join('');
   PREV = Object.fromEntries(REQS.map((c) => [c.id, { matched: c.matched, replied: c.replied, messaged: c.messaged }]));
-  renderReqStats();
   if (!STATS || Date.now() - STATS_AT > 60_000) { STATS_AT = Date.now(); loadStats(); } // الرسم بيتحدث كل دقيقة
 }
 let STATS_AT = 0;

@@ -221,7 +221,7 @@ async function cached<T>(key: string, ms: number, fn: () => Promise<T>): Promise
 }
 // الأعمدة اللي البوت محتاجها بس (من غير قايمة الصفحات المؤقتة وبيانات تسجيل الدخول)
 const HOT_SETTINGS = 'id,page_id,page_name,page_token,return_to,dm_auto_enabled,dm_auto_text,dm_cooldown_hours,dm_follow_button,dm_ai_enabled,ai_about,last_poll,last_webhook';
-const hotSettings = () => cached('settings', 30_000, async () => {
+const hotSettings = () => cached('settings', 5 * 60_000, async () => {
   const { data, error } = await db.from('settings').select(HOT_SETTINGS).eq('id', 1).single();
   if (error) throw new Error(error.message);
   return data as any;
@@ -235,7 +235,7 @@ async function getPages(): Promise<any[]> {
   const { data } = await db.from('pages').select('*').order('connected_at');
   return data || [];
 }
-const hotPages = () => cached('pages', 60_000, getPages);
+const hotPages = () => cached('pages', 10 * 60_000, getPages);
 // لكل صفحة بنعمل "سياق" فيه بياناتها + الإعدادات العامة
 const ctxFor = (s: any, p: any) => ({ ...s, page_id: p.id, page_name: p.name, page_token: p.token });
 // الطلبات القديمة اللي مالهاش صفحة بتتبع أول صفحة اتربطت
@@ -791,7 +791,10 @@ async function drainOutbox(budgetMs = 40_000) {
 
 // الأعمدة اللي البوت بيستخدمها (من غير العدادات)
 const CAMP_COLS = 'id,name,active,all_posts,posts,keywords,match_all,reply_enabled,replies,dm_enabled,dm_messages,button_title,button_url,like_comment,one_per_user,since,page_id,follow_button,smart_reply,created_at';
-const activeCampaigns = () => cached('campaigns', 30_000, async () => {
+// نسخة خفيفة من قاعدة البيانات (من غير صور المنشورات) — ولو الدالة مش موجودة بنرجع للطريقة العادية
+const activeCampaigns = () => cached('campaigns', 5 * 60_000, async () => {
+  const lite = await db.rpc('bot_campaigns');
+  if (!lite.error && Array.isArray(lite.data)) return lite.data as any[];
   const { data } = await db.from('campaigns').select(CAMP_COLS).eq('active', true).order('created_at', { ascending: false });
   return (data || []) as any[];
 });
@@ -802,7 +805,7 @@ async function poll(force = false) {
   const { data: t } = await db.from('settings').select('last_poll,last_webhook').eq('id', 1).maybeSingle();
   const since = (x?: string) => (x ? Date.now() - new Date(x).getTime() : Infinity);
   const webhookAlive = since(t?.last_webhook) < 15 * 60_000;
-  const gap = webhookAlive ? 5 * 60_000 : 60_000;
+  const gap = webhookAlive ? 15 * 60_000 : 2 * 60_000;
   if (!force && since(t?.last_poll) < gap) return { skipped: 'too soon' };
   await setSettings({ last_poll: new Date().toISOString() });
   const settings = await hotSettings();

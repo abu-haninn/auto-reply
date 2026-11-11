@@ -517,12 +517,12 @@ async function start() {
   if (hash === 'pick-page') showPicker();
   loadRequests();
 }
-// تحديث تلقائي كل 30 ثانية (وبس لما التطبيق مفتوح قدامك) — عشان نوفّر من حصة Supabase المجانية
+// تحديث تلقائي كل دقيقة (وبس لما التطبيق مفتوح قدامك) — عشان نوفّر من حصة Supabase المجانية
 setInterval(() => {
   if (document.hidden || !PASS || $('#appView').classList.contains('hidden')) return;
   if ($('#tab-requests').classList.contains('on') && !$('#sheet').classList.contains('on')) { loadStatus().catch(() => {}); loadRequests(); }
   if ($('#tab-activity').classList.contains('on')) loadLogs();
-}, 30000);
+}, 60000);
 
 paint();
 if (SERVER && PASS) start(); else showLogin();

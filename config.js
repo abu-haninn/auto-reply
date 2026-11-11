@@ -1,2 +1,2 @@
-// رابط السيرفر بتاعك على Supabase
-window.SERVER_URL = 'https://oagnsztrxlqxdikbgadw.supabase.co/functions/v1/bot';
+// رابط السيرفر (مشروع walid-bot على Supabase)
+window.SERVER_URL = 'https://pnjzfdsruqvdlmorrguw.supabase.co/functions/v1/bot';

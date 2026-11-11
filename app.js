@@ -44,7 +44,8 @@ let PASS = store.get('pass');
 async function api(path, method = 'GET', body) {
   const res = await fetch(SERVER + '/api' + path, {
     method,
-    headers: { 'x-admin-password': PASS, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    // كلمة السر بتتشفر عشان لو فيها حروف عربي (المتصفح مش بيبعت عربي في الـ headers)
+    headers: { 'x-admin-password': encodeURIComponent(PASS), ...(body ? { 'Content-Type': 'application/json' } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -516,13 +517,12 @@ async function start() {
   if (hash === 'pick-page') showPicker();
   loadRequests();
 }
-// تحديث تلقائي كل 10 ثواني: الأرقام والطلبات والنشاط
+// تحديث تلقائي كل 30 ثانية (وبس لما التطبيق مفتوح قدامك) — عشان نوفّر من حصة Supabase المجانية
 setInterval(() => {
   if (document.hidden || !PASS || $('#appView').classList.contains('hidden')) return;
-  loadStatus().catch(() => {});
-  if ($('#tab-requests').classList.contains('on') && !$('#sheet').classList.contains('on')) loadRequests();
+  if ($('#tab-requests').classList.contains('on') && !$('#sheet').classList.contains('on')) { loadStatus().catch(() => {}); loadRequests(); }
   if ($('#tab-activity').classList.contains('on')) loadLogs();
-}, 10000);
+}, 30000);
 
 paint();
 if (SERVER && PASS) start(); else showLogin();

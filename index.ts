@@ -207,6 +207,25 @@ async function getSettings() {
   if (error) throw new Error('قاعدة البيانات مش متجهزة — شغّل ملف schema.sql في Supabase: ' + error.message);
   return data;
 }
+// =====================================================================
+//  توفير الاستهلاك: Supabase المجاني بيسمح بـ 5 جيجا بيانات خارجة في الشهر بس.
+//  الحاجات اللي بتتقرا كتير (الإعدادات/الصفحات/الطلبات) بنحفظها في الذاكرة شوية بدل ما نجيبها كل مرة.
+// =====================================================================
+const memo = new Map<string, { at: number; v: any }>();
+async function cached<T>(key: string, ms: number, fn: () => Promise<T>): Promise<T> {
+  const c = memo.get(key);
+  if (c && Date.now() - c.at < ms) return c.v as T;
+  const v = await fn();
+  memo.set(key, { at: Date.now(), v });
+  return v;
+}
+// الأعمدة اللي البوت محتاجها بس (من غير قايمة الصفحات المؤقتة وبيانات تسجيل الدخول)
+const HOT_SETTINGS = 'id,page_id,page_name,page_token,return_to,dm_auto_enabled,dm_auto_text,dm_cooldown_hours,dm_follow_button,dm_ai_enabled,ai_about,last_poll,last_webhook';
+const hotSettings = () => cached('settings', 30_000, async () => {
+  const { data, error } = await db.from('settings').select(HOT_SETTINGS).eq('id', 1).single();
+  if (error) throw new Error(error.message);
+  return data as any;
+});
 async function setSettings(patch: Record<string, unknown>) {
   const { error } = await db.from('settings').update(patch).eq('id', 1);
   if (error) throw new Error(error.message);
@@ -216,6 +235,7 @@ async function getPages(): Promise<any[]> {
   const { data } = await db.from('pages').select('*').order('connected_at');
   return data || [];
 }
+const hotPages = () => cached('pages', 60_000, getPages);
 // لكل صفحة بنعمل "سياق" فيه بياناتها + الإعدادات العامة
 const ctxFor = (s: any, p: any) => ({ ...s, page_id: p.id, page_name: p.name, page_token: p.token });
 // الطلبات القديمة اللي مالهاش صفحة بتتبع أول صفحة اتربطت
@@ -570,7 +590,7 @@ async function handleMessage(psid: string, text: string, s: any, at = 0) {
   // والروابط في النص العادي بتبقى قابلة للضغط لوحدها
   const send = (msg: string) => sendText(s, psid, msg);
 
-  const { data: rules } = await db.from('dm_rules').select('*').eq('active', true).order('created_at');
+  const rules = await cached('dm_rules', 60_000, async () => (await db.from('dm_rules').select('id,keywords,reply').eq('active', true).order('created_at')).data || []);
   for (const r of rules || []) {
     if (!matchKeyword(text, r.keywords)) continue;
     const name = await nameOf();
@@ -646,11 +666,11 @@ async function chatReply(psid: string, text: string, s: any, name = ''): Promise
     history = msgs.slice(0, lastPage + 1).map((m: any) => `${m.from?.id === s.page_id ? 'إنت' : 'هو'}: ${cut(m.message || '(مرفق)', 300)}`).join('\n');
   } catch { /* */ }
   const g = guessGender(name);
-  const { data: camps } = await db.from('campaigns').select('name,posts,dm_messages,button_title,button_url,page_id,created_at').eq('active', true).order('created_at', { ascending: false }).limit(20);
-  const knowledge = (camps || []).filter((c: any) => !c.page_id || c.page_id === s.page_id)
+  const camps = await activeCampaigns(); // من الذاكرة (مش من قاعدة البيانات كل رسالة)
+  const knowledge = camps.filter((c: any) => !c.page_id || c.page_id === s.page_id).slice(0, 12)
     .map((c: any, i: number) => {
-      const posts = (c.posts || []).map((p: any) => cut(p.text || '', 120)).filter(Boolean).join(' / ');
-      return `${i + 1}) ${cut(c.name, 80)}${posts ? ` (عن: ${posts})` : ''}\n   الرسالة اللي بتتبعت للناس: ${cut((c.dm_messages || [])[0] || '', 500)}${c.button_url ? `\n   رابط إضافي: ${c.button_url}` : ''}`;
+      const posts = (c.posts || []).map((p: any) => cut(p.text || '', 80)).filter(Boolean).slice(0, 1).join(' / ');
+      return `${i + 1}) ${cut(c.name, 80)}${posts ? ` (عن: ${posts})` : ''}\n   الرسالة اللي بتتبعت للناس: ${cut((c.dm_messages || [])[0] || '', 350)}${c.button_url ? `\n   رابط إضافي: ${c.button_url}` : ''}`;
     }).join('\n');
   const system = [
     `إنت "${s.page_name}" (أبو حنين) بنفسك، بترد على رسايل الماسنجر من موبايلك زي أي إنسان.`,
@@ -728,9 +748,12 @@ async function drainOutbox(budgetMs = 40_000) {
   if (draining) return;
   draining = true;
   try {
+    // الطابور فاضي (أغلب الوقت) ← سؤال صغير جدًا ونخرج من غير ما نحمّل أي حاجة تانية
+    const { count: pending } = await db.from('outbox').select('id', { count: 'exact', head: true }).is('claimed_at', null);
+    if (!pending) return;
     const started = Date.now();
-    const pages = await getPages();
-    const settings = await getSettings();
+    const pages = await hotPages();
+    const settings = await hotSettings();
     while (Date.now() - started < budgetMs) {
       const { data: batch } = await db.from('outbox').select('*').is('claimed_at', null).order('id').limit(10);
       if (!batch?.length) break;
@@ -766,18 +789,31 @@ async function drainOutbox(budgetMs = 40_000) {
   } finally { draining = false; }
 }
 
-async function activeCampaigns() {
-  const { data } = await db.from('campaigns').select('*').eq('active', true).order('created_at', { ascending: false });
-  return data || [];
-}
+// الأعمدة اللي البوت بيستخدمها (من غير العدادات)
+const CAMP_COLS = 'id,name,active,all_posts,posts,keywords,match_all,reply_enabled,replies,dm_enabled,dm_messages,button_title,button_url,like_comment,one_per_user,since,page_id,follow_button,smart_reply,created_at';
+const activeCampaigns = () => cached('campaigns', 30_000, async () => {
+  const { data } = await db.from('campaigns').select(CAMP_COLS).eq('active', true).order('created_at', { ascending: false });
+  return (data || []) as any[];
+});
 
-// الفحص الدوري (Supabase بيشغله كل 30 ثانية)
+// الفحص الدوري (Supabase بيشغله كل 30 ثانية) — احتياطي بس:
+// فيسبوك بيبعتلنا التعليقات لوحده (الويب هوك)، فلو الويب هوك شغال الفحص بيحصل كل 5 دقايق بس
 async function poll(force = false) {
-  const settings = await getSettings();
-  const pages = await getPages();
-  if (!pages.length) return { skipped: 'no page' };
-  if (!force && settings.last_poll && Date.now() - new Date(settings.last_poll).getTime() < 20_000) return { skipped: 'too soon' };
+  const { data: t } = await db.from('settings').select('last_poll,last_webhook').eq('id', 1).maybeSingle();
+  const since = (x?: string) => (x ? Date.now() - new Date(x).getTime() : Infinity);
+  const webhookAlive = since(t?.last_webhook) < 15 * 60_000;
+  const gap = webhookAlive ? 5 * 60_000 : 60_000;
+  if (!force && since(t?.last_poll) < gap) return { skipped: 'too soon' };
   await setSettings({ last_poll: new Date().toISOString() });
+  const settings = await hotSettings();
+  const pages = await hotPages();
+  if (!pages.length) return { skipped: 'no page' };
+  // السيرفر اتنقل لرابط جديد ← نسجل الويب هوك عند فيسبوك على الرابط الجديد لوحدنا (مرة واحدة)
+  const { data: wh } = await db.from('settings').select('webhook_url').eq('id', 1).maybeSingle();
+  if (wh && wh.webhook_url !== FN_URL + '/webhook' && env('FB_APP_SECRET')) {
+    for (const p of pages) await selectPage({ id: p.id, name: p.name, token: p.token, picture: p.picture }).catch(() => {});
+    await setSettings({ webhook_url: FN_URL + '/webhook' }).catch(() => {});
+  }
   const all = await activeCampaigns();
   if (!all.length) return { skipped: 'no campaigns' };
 
@@ -832,11 +868,13 @@ async function validSignature(req: Request, raw: string) {
   return sig.length === expected.length && sig === expected;
 }
 
+let lastWebhookMark = 0;
 async function processWebhook(body: any) {
   if (body.object !== 'page') return;
-  const settings = await getSettings();
-  await setSettings({ last_webhook: new Date().toISOString() });
-  const pages = await getPages();
+  const settings = await hotSettings();
+  // بنسجل إن الويب هوك شغال مرة كل دقيقة بالكتير (مش مع كل تعليق)
+  if (Date.now() - lastWebhookMark > 60_000) { lastWebhookMark = Date.now(); await setSettings({ last_webhook: new Date().toISOString() }).catch(() => {}); }
+  const pages = await hotPages();
   if (!pages.length) return;
   let all: any[] | null = null;
   const jobs: Promise<unknown>[] = [];
@@ -961,10 +999,15 @@ async function pagesFromUserToken(userToken: string) {
 async function api(req: Request, path: string): Promise<Response> {
   const pass = env('ADMIN_PASSWORD');
   if (!pass) return json({ error: 'لازم تضيف ADMIN_PASSWORD في Secrets بتاعة Supabase' }, 500);
-  if ((req.headers.get('x-admin-password') || '') !== pass) return json({ error: 'كلمة السر غلط', auth: true }, 401);
+  // اللوحة بتبعت كلمة السر متشفرة (عشان الحروف العربي) — بنقبل الشكلين
+  const got = req.headers.get('x-admin-password') || '';
+  let decoded = got;
+  try { decoded = decodeURIComponent(got); } catch { /* */ }
+  if (got !== pass && decoded !== pass) return json({ error: 'كلمة السر غلط', auth: true }, 401);
 
   const method = req.method;
   const body = method === 'GET' || method === 'DELETE' ? {} : await req.json().catch(() => ({}));
+  if (method !== 'GET') memo.clear(); // أي تعديل من اللوحة ← البوت ياخد الجديد على طول
   const s = await getSettings();
   const pages = await getPages();
   // الصفحة اللي اللوحة شغالة عليها دلوقتي (?page= أو page_id في الطلب) — وإلا أول صفحة
@@ -1201,6 +1244,12 @@ async function api(req: Request, path: string): Promise<Response> {
     if (!cur) return json({ error: 'مفيش صفحة' }, 400);
     try { return json({ ok: true, text: await chatReply('0', String(body.text || ''), ctxFor(s, cur), String(body.name || '')), model: geminiModelOk }); }
     catch (e) { return json({ ok: false, error: (e as Error).message }); }
+  }
+  // بعد نقل السيرفر: تسجيل الويب هوك على الرابط الجديد + اشتراك كل الصفحات المربوطة (من غير تسجيل دخول تاني)
+  if (path === '/fb/resubscribe' && method === 'POST') {
+    const out: any[] = [];
+    for (const p of pages) out.push({ page: p.name, warnings: await selectPage({ id: p.id, name: p.name, token: p.token, picture: p.picture }) });
+    return json({ ok: true, callback: FN_URL + '/webhook', pages: out });
   }
   if (path === '/poll-now' && method === 'POST') {
     return json(await poll(true));
